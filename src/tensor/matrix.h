@@ -7,11 +7,11 @@
 namespace mini_inference::tensor
 {
 
-    class matrix
+    class Matrix
     {
     public:
-        matrix() = default;
-        matrix(std::size_t rows, std::size_t cols, std::vector<float> values = {});
+        Matrix() = default;
+        Matrix(std::size_t rows, std::size_t cols, std::vector<float> values = {});
 
         std::size_t rows() const;
         std::size_t cols() const;
@@ -26,6 +26,6 @@ namespace mini_inference::tensor
         std::vector<float> values_{};
     };
 
-    matrix matmul(const matrix &lhs, const matrix &rhs);
+    Matrix matmul(const Matrix &lhs, const Matrix &rhs);
 
 } // namespace mini_inference::tensor

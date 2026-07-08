@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(mini_inference_core
     src/tensor/matrix.cpp
     src/tensor/tensor.cpp
+    src/layers/linear.cpp
 )
 
 target_include_directories(mini_inference_core
@@ -31,5 +32,13 @@ add_executable(test_tensor
 target_link_libraries(test_tensor PRIVATE mini_inference_core)
 target_include_directories(test_tensor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(test_linear
+    tests/test_linear.cpp
+)
+
+target_link_libraries(test_linear PRIVATE mini_inference_core)
+target_include_directories(test_linear PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_test(NAME matrix COMMAND test_matrix)
 add_test(NAME tensor COMMAND test_tensor)
+add_test(NAME linear COMMAND test_linear)

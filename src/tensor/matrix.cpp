@@ -5,7 +5,7 @@
 namespace mini_inference::tensor
 {
 
-    matrix::matrix(std::size_t rows, std::size_t cols, std::vector<float> values)
+    Matrix::Matrix(std::size_t rows, std::size_t cols, std::vector<float> values)
         : rows_(rows), cols_(cols)
     {
         if (values.empty())
@@ -19,34 +19,34 @@ namespace mini_inference::tensor
         }
     }
 
-    std::size_t matrix::rows() const
+    std::size_t Matrix::rows() const
     {
         return rows_;
     }
 
-    std::size_t matrix::cols() const
+    std::size_t Matrix::cols() const
     {
         return cols_;
     }
 
-    const std::vector<float> &matrix::values() const
+    const std::vector<float> &Matrix::values() const
     {
         return values_;
     }
 
-    float &matrix::at(std::size_t row, std::size_t col)
+    float &Matrix::at(std::size_t row, std::size_t col)
     {
         assert(row < rows_ && col < cols_);
         return values_[row * cols_ + col];
     }
 
-    float matrix::at(std::size_t row, std::size_t col) const
+    float Matrix::at(std::size_t row, std::size_t col) const
     {
         assert(row < rows_ && col < cols_);
         return values_[row * cols_ + col];
     }
 
-    matrix matmul(const matrix &lhs, const matrix &rhs)
+    Matrix matmul(const Matrix &lhs, const Matrix &rhs)
     {
         assert(lhs.cols() > 0 && lhs.rows() > 0);
         assert(rhs.cols() > 0 && rhs.rows() > 0);
@@ -56,7 +56,7 @@ namespace mini_inference::tensor
             throw std::invalid_argument("matrix dimensions are incompatible for multiplication");
         }
 
-        matrix result(lhs.rows(), rhs.cols());
+        Matrix result(lhs.rows(), rhs.cols());
         for (std::size_t row = 0; row < lhs.rows(); ++row)
         {
             for (std::size_t col = 0; col < rhs.cols(); ++col)

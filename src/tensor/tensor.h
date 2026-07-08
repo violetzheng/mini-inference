@@ -8,11 +8,11 @@
 namespace mini_inference::tensor
 {
 
-    class tensor
+    class Tensor
     {
     public:
-        tensor() = default;
-        tensor(std::vector<std::size_t> shape, std::vector<float> values = {});
+        Tensor() = default;
+        Tensor(std::vector<std::size_t> shape, std::vector<float> values = {});
 
         const std::vector<std::size_t> &shape() const;
         std::size_t rank() const;
@@ -25,7 +25,7 @@ namespace mini_inference::tensor
         float &at(std::size_t flat_index);
         float at(std::size_t flat_index) const;
 
-        tensor reshape(const std::vector<std::size_t> &new_shape) const;
+        Tensor reshape(const std::vector<std::size_t> &new_shape) const;
 
     private:
         std::vector<std::size_t> shape_{};

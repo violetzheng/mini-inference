@@ -1,4 +1,4 @@
-#include "tensor/tensor.h"
+#include "layers/linear.h"
 
 #include <cmath>
 #include <iostream>
@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+using mini_inference::layers::Linear;
 using mini_inference::tensor::Tensor;
 
 namespace
@@ -35,29 +36,29 @@ namespace
 
 int main()
 {
-    Tensor values({2, 3}, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
-    expect(values.rank() == 2, "tensor rank");
-    expect(values.shape().size() == 2, "tensor shape size");
-    expect(values.shape()[0] == 2, "tensor first dimension");
-    expect(values.shape()[1] == 3, "tensor second dimension");
-    expect_close(values.at({1, 2}), 6.0f, "2D access");
-    expect_close(values.at(5), 6.0f, "flat access");
+    Linear layer(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, {0.5f, -0.5f});
 
-    Tensor reshaped = values.reshape({3, 2});
-    expect(reshaped.shape()[0] == 3, "reshape first dimension");
-    expect(reshaped.shape()[1] == 2, "reshape second dimension");
-    expect_close(reshaped.at({2, 1}), 6.0f, "reshape preserves values");
+    Tensor input({2, 2}, {1.0f, 2.0f, 3.0f, 4.0f});
+    Tensor output = layer.forward(input);
+
+    expect(output.rank() == 2, "output rank");
+    expect(output.shape()[0] == 2, "batch size");
+    expect(output.shape()[1] == 2, "output size");
+    expect_close(output.at({0, 0}), 1.0f * 1.0f + 2.0f * 2.0f + 0.5f, "first output");
+    expect_close(output.at({0, 1}), 1.0f * 3.0f + 2.0f * 4.0f - 0.5f, "second output");
+    expect_close(output.at({1, 0}), 3.0f * 1.0f + 4.0f * 2.0f + 0.5f, "third output");
+    expect_close(output.at({1, 1}), 3.0f * 3.0f + 4.0f * 4.0f - 0.5f, "fourth output");
 
     bool threw = false;
     try
     {
-        (void)Tensor({2, 2}, {1.0f, 2.0f, 3.0f});
+        (void)layer.forward(Tensor({2, 3}, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}));
     }
     catch (const std::invalid_argument &)
     {
         threw = true;
     }
-    expect(threw, "constructor validates element count");
+    expect(threw, "shape mismatch throws");
 
     if (failures != 0)
     {
@@ -65,6 +66,6 @@ int main()
         return 1;
     }
 
-    std::cout << "All tensor tests passed" << std::endl;
+    std::cout << "All linear layer tests passed" << std::endl;
     return 0;
 }

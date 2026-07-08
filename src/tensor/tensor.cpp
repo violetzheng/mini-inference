@@ -16,7 +16,7 @@ namespace mini_inference::tensor
 
     } // namespace
 
-    tensor::tensor(std::vector<std::size_t> shape, std::vector<float> values)
+    Tensor::Tensor(std::vector<std::size_t> shape, std::vector<float> values)
         : shape_(std::move(shape)), values_(std::move(values))
     {
         if (shape_.empty())
@@ -34,27 +34,27 @@ namespace mini_inference::tensor
         }
     }
 
-    const std::vector<std::size_t> &tensor::shape() const
+    const std::vector<std::size_t> &Tensor::shape() const
     {
         return shape_;
     }
 
-    std::size_t tensor::rank() const
+    std::size_t Tensor::rank() const
     {
         return shape_.size();
     }
 
-    std::size_t tensor::numel() const
+    std::size_t Tensor::numel() const
     {
         return values_.size();
     }
 
-    const std::vector<float> &tensor::values() const
+    const std::vector<float> &Tensor::values() const
     {
         return values_;
     }
 
-    float &tensor::at(const std::vector<std::size_t> &indices)
+    float &Tensor::at(const std::vector<std::size_t> &indices)
     {
         if (indices.size() != shape_.size())
         {
@@ -78,21 +78,12 @@ namespace mini_inference::tensor
         return values_[flat_index];
     }
 
-    float tensor::at(const std::vector<std::size_t> &indices) const
+    float Tensor::at(const std::vector<std::size_t> &indices) const
     {
-        return const_cast<tensor *>(this)->at(indices);
+        return const_cast<Tensor *>(this)->at(indices);
     }
 
-    float &tensor::at(std::size_t flat_index)
-    {
-        if (flat_index >= values_.size())
-        {
-            throw std::out_of_range("tensor flat index out of bounds");
-        }
-        return values_[flat_index];
-    }
-
-    float tensor::at(std::size_t flat_index) const
+    float &Tensor::at(std::size_t flat_index)
     {
         if (flat_index >= values_.size())
         {
@@ -101,14 +92,23 @@ namespace mini_inference::tensor
         return values_[flat_index];
     }
 
-    tensor tensor::reshape(const std::vector<std::size_t> &new_shape) const
+    float Tensor::at(std::size_t flat_index) const
+    {
+        if (flat_index >= values_.size())
+        {
+            throw std::out_of_range("tensor flat index out of bounds");
+        }
+        return values_[flat_index];
+    }
+
+    Tensor Tensor::reshape(const std::vector<std::size_t> &new_shape) const
     {
         const std::size_t new_numel = compute_numel(new_shape);
         if (new_numel != values_.size())
         {
             throw std::invalid_argument("tensor reshape size mismatch");
         }
-        return tensor(new_shape, values_);
+        return Tensor(new_shape, values_);
     }
 
 } // namespace mini_inference::tensor

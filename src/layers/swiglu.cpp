@@ -1,0 +1,87 @@
+#include "layers/swiglu.h"
+
+#include <cassert>
+#include <cmath>
+#include <stdexcept>
+#include <string>
+
+namespace mini_inference::layers
+{
+
+    namespace
+    {
+
+        std::size_t validate_dim(std::size_t dim, const char *name)
+        {
+            if (dim == 0)
+            {
+                throw std::invalid_argument(std::string("swiglu ") + name + " must be greater than zero");
+            }
+            return dim;
+        }
+
+        // silu(x) = x * sigmoid(x) = x / (1 + exp(-x)). 
+        // One branch-free, contiguous pass over gate, up, out to reduce cache misses, easier to vectorize
+        void fused_silu_mul(const float *__restrict gate, const float *__restrict up,
+                             float *__restrict out, std::size_t n)
+        {
+            assert(gate != nullptr && up != nullptr && out != nullptr);
+
+#pragma clang loop vectorize(enable) interleave(enable)
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const float g = gate[i];
+                const float sigmoid_g = 1.0f / (1.0f + std::exp(-g));
+                out[i] = g * sigmoid_g * up[i];
+            }
+        }
+
+    } // namespace
+
+    SwiGLU::SwiGLU(std::size_t hidden_dim, std::size_t intermediate_dim,
+                   std::vector<float> gate_weights, std::vector<float> gate_bias,
+                   std::vector<float> up_weights, std::vector<float> up_bias,
+                   std::vector<float> down_weights, std::vector<float> down_bias)
+        : hidden_dim_(validate_dim(hidden_dim, "hidden_dim")),
+          intermediate_dim_(validate_dim(intermediate_dim, "intermediate_dim")),
+          gate_proj_(hidden_dim_, intermediate_dim_, std::move(gate_weights), std::move(gate_bias)),
+          up_proj_(hidden_dim_, intermediate_dim_, std::move(up_weights), std::move(up_bias)),
+          down_proj_(intermediate_dim_, hidden_dim_, std::move(down_weights), std::move(down_bias))
+    {
+    }
+
+    std::size_t SwiGLU::hidden_dim() const
+    {
+        return hidden_dim_;
+    }
+
+    std::size_t SwiGLU::intermediate_dim() const
+    {
+        return intermediate_dim_;
+    }
+
+    mini_inference::tensor::Tensor SwiGLU::forward(const mini_inference::tensor::Tensor &input) const
+    {
+        if (input.rank() != 2)
+        {
+            throw std::invalid_argument("swiglu layer expects a 2D input tensor");
+        }
+
+        const auto &shape = input.shape();
+        if (shape[1] != hidden_dim_)
+        {
+            throw std::invalid_argument("input feature count does not match swiglu hidden_dim");
+        }
+
+        const mini_inference::tensor::Tensor gate = gate_proj_.forward(input);
+        const mini_inference::tensor::Tensor up = up_proj_.forward(input);
+        assert(gate.numel() == up.numel());
+
+        std::vector<float> fused(gate.numel());
+        fused_silu_mul(gate.values().data(), up.values().data(), fused.data(), fused.size());
+
+        const mini_inference::tensor::Tensor fused_tensor({shape[0], intermediate_dim_}, std::move(fused));
+        return down_proj_.forward(fused_tensor);
+    }
+
+} // namespace mini_inference::layers

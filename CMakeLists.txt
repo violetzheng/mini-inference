@@ -12,12 +12,17 @@ add_library(mini_inference_core
     src/layers/rms_norm.cpp
     src/layers/softmax.cpp
     src/layers/rope.cpp
+    src/layers/attention.cpp
+    src/layers/swiglu.cpp
+    src/layers/transformer_block.cpp
 )
 
 target_include_directories(mini_inference_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+target_compile_options(mini_inference_core PRIVATE -O3 -march=native)
 
 enable_testing()
 
@@ -63,9 +68,33 @@ add_executable(test_rope
 target_link_libraries(test_rope PRIVATE mini_inference_core)
 target_include_directories(test_rope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(test_attention
+    tests/test_attention.cpp
+)
+
+target_link_libraries(test_attention PRIVATE mini_inference_core)
+target_include_directories(test_attention PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_swiglu
+    tests/test_swiglu.cpp
+)
+
+target_link_libraries(test_swiglu PRIVATE mini_inference_core)
+target_include_directories(test_swiglu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_transformer_block
+    tests/test_transformer_block.cpp
+)
+
+target_link_libraries(test_transformer_block PRIVATE mini_inference_core)
+target_include_directories(test_transformer_block PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_test(NAME matrix COMMAND test_matrix)
 add_test(NAME tensor COMMAND test_tensor)
 add_test(NAME linear COMMAND test_linear)
 add_test(NAME rms_norm COMMAND test_rms_norm)
 add_test(NAME softmax COMMAND test_softmax)
 add_test(NAME rope COMMAND test_rope)
+add_test(NAME attention COMMAND test_attention)
+add_test(NAME swiglu COMMAND test_swiglu)
+add_test(NAME transformer_block COMMAND test_transformer_block)

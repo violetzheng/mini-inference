@@ -18,6 +18,9 @@ for readability and simple architecture rather than production performance.
 - **Model** — embedding → N stacked transformer
   blocks → final RMSNorm → LM head → logits.
 - **Byte-level BPE tokenizer**
+- **GGUF loader** — reads a `.gguf` checkpoint (F32/F16 tensors, `llama` architecture,
+  `gpt2` byte-level BPE vocab) directly into a `Model` + `BpeTokenizer`. Quantized
+  tensor types and grouped-query attention checkpoints are rejected with a clear error.
 
 
 ## Building & testing
@@ -39,5 +42,6 @@ src/
   layers/      linear, rms_norm, rope, softmax, attention, swiglu, transformer_block, embedding
   model/       assembled Model (forward + generate)
   tokenizer/   byte-level BPE tokenizer
+  loader/      GGUF file parsing + Model/BpeTokenizer construction
 tests/         unit tests, one per module
 ```

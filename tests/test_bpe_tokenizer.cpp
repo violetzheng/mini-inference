@@ -67,6 +67,58 @@ int main()
     }
     expect(threw_empty_corpus, "empty training corpus throws");
 
+    // encode()'s byte-to-id mapping assumes ids 0-255 are the base byte values in
+    // order, so the vocab here must follow that layout too, plus one appended merge.
+    std::vector<std::string> base_vocab;
+    base_vocab.reserve(257);
+    for (int byte = 0; byte < 256; ++byte)
+    {
+        base_vocab.push_back(std::string(1, static_cast<char>(byte)));
+    }
+    base_vocab.push_back("ab"); // id 256: merge of 'a' (97) + 'b' (98)
+
+    BpeTokenizer from_vocab_tokenizer = BpeTokenizer::from_vocab(
+        base_vocab, {BpeTokenizer::VocabMerge{static_cast<std::size_t>('a'), static_cast<std::size_t>('b'), 256}});
+
+    expect(from_vocab_tokenizer.vocab_size() == 257, "from_vocab vocab_size matches supplied vocab");
+    expect(from_vocab_tokenizer.token_bytes(256) == "ab", "from_vocab token_bytes returns the supplied entry");
+    expect(from_vocab_tokenizer.encode("ab") == std::vector<std::size_t>{256}, "from_vocab encode applies the supplied merge");
+    expect(from_vocab_tokenizer.decode({256}) == "ab", "from_vocab decode round-trips the merged token");
+
+    bool threw_empty_vocab = false;
+    try
+    {
+        (void)BpeTokenizer::from_vocab({}, {});
+    }
+    catch (const std::invalid_argument &)
+    {
+        threw_empty_vocab = true;
+    }
+    expect(threw_empty_vocab, "from_vocab with an empty vocabulary throws");
+
+    bool threw_out_of_range_merge = false;
+    try
+    {
+        (void)BpeTokenizer::from_vocab({"a", "b"}, {BpeTokenizer::VocabMerge{0, 1, 99}});
+    }
+    catch (const std::invalid_argument &)
+    {
+        threw_out_of_range_merge = true;
+    }
+    expect(threw_out_of_range_merge, "from_vocab with an out-of-range merge id throws");
+
+    bool threw_duplicate_merge = false;
+    try
+    {
+        (void)BpeTokenizer::from_vocab({"a", "b", "ab", "aba"},
+                                       {BpeTokenizer::VocabMerge{0, 1, 2}, BpeTokenizer::VocabMerge{0, 1, 3}});
+    }
+    catch (const std::invalid_argument &)
+    {
+        threw_duplicate_merge = true;
+    }
+    expect(threw_duplicate_merge, "from_vocab with a duplicate merge pair throws");
+
     if (failures != 0)
     {
         std::cerr << failures << " test(s) failed" << std::endl;

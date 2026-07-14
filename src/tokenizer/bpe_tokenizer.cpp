@@ -112,6 +112,39 @@ namespace mini_inference::tokenizer
         return tokenizer;
     }
 
+    BpeTokenizer BpeTokenizer::from_vocab(std::vector<std::string> id_to_bytes,
+                                          std::vector<VocabMerge> merges)
+    {
+        if (id_to_bytes.empty())
+        {
+            throw std::invalid_argument("bpe vocabulary must not be empty");
+        }
+
+        BpeTokenizer tokenizer;
+        tokenizer.id_to_bytes_ = std::move(id_to_bytes);
+
+        for (std::size_t rank = 0; rank < merges.size(); ++rank)
+        {
+            const VocabMerge &merge = merges[rank];
+            if (merge.left_id >= tokenizer.id_to_bytes_.size() ||
+                merge.right_id >= tokenizer.id_to_bytes_.size() ||
+                merge.new_token_id >= tokenizer.id_to_bytes_.size())
+            {
+                throw std::invalid_argument("bpe merge references a token id outside the vocabulary");
+            }
+
+            const auto key = std::make_pair(merge.left_id, merge.right_id);
+            if (tokenizer.merges_.find(key) != tokenizer.merges_.end())
+            {
+                throw std::invalid_argument("bpe vocabulary contains a duplicate merge pair");
+            }
+
+            tokenizer.merges_[key] = MergeRule{rank, merge.new_token_id};
+        }
+
+        return tokenizer;
+    }
+
     std::vector<std::size_t> BpeTokenizer::encode(const std::string &text) const
     {
         std::vector<std::size_t> sequence = bytes_to_ids(text);

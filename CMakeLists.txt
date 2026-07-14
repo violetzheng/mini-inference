@@ -15,6 +15,9 @@ add_library(mini_inference_core
     src/layers/attention.cpp
     src/layers/swiglu.cpp
     src/layers/transformer_block.cpp
+    src/layers/embedding.cpp
+    src/model/model.cpp
+    src/tokenizer/bpe_tokenizer.cpp
 )
 
 target_include_directories(mini_inference_core
@@ -89,6 +92,34 @@ add_executable(test_transformer_block
 target_link_libraries(test_transformer_block PRIVATE mini_inference_core)
 target_include_directories(test_transformer_block PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(test_embedding
+    tests/test_embedding.cpp
+)
+
+target_link_libraries(test_embedding PRIVATE mini_inference_core)
+target_include_directories(test_embedding PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_model
+    tests/test_model.cpp
+)
+
+target_link_libraries(test_model PRIVATE mini_inference_core)
+target_include_directories(test_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_generate
+    tests/test_generate.cpp
+)
+
+target_link_libraries(test_generate PRIVATE mini_inference_core)
+target_include_directories(test_generate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_bpe_tokenizer
+    tests/test_bpe_tokenizer.cpp
+)
+
+target_link_libraries(test_bpe_tokenizer PRIVATE mini_inference_core)
+target_include_directories(test_bpe_tokenizer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_test(NAME matrix COMMAND test_matrix)
 add_test(NAME tensor COMMAND test_tensor)
 add_test(NAME linear COMMAND test_linear)
@@ -98,3 +129,7 @@ add_test(NAME rope COMMAND test_rope)
 add_test(NAME attention COMMAND test_attention)
 add_test(NAME swiglu COMMAND test_swiglu)
 add_test(NAME transformer_block COMMAND test_transformer_block)
+add_test(NAME embedding COMMAND test_embedding)
+add_test(NAME model COMMAND test_model)
+add_test(NAME generate COMMAND test_generate)
+add_test(NAME bpe_tokenizer COMMAND test_bpe_tokenizer)

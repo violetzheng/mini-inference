@@ -54,6 +54,16 @@ namespace mini_inference::layers
         return bias_;
     }
 
+    std::size_t Linear::in_features() const
+    {
+        return in_features_;
+    }
+
+    std::size_t Linear::out_features() const
+    {
+        return out_features_;
+    }
+
     mini_inference::tensor::Tensor Linear::forward(const mini_inference::tensor::Tensor &input) const
     {
         if (input.rank() != 2)

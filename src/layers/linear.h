@@ -16,6 +16,8 @@ namespace mini_inference::layers
 
         const std::vector<float> &weights() const;
         const std::vector<float> &bias() const;
+        std::size_t in_features() const;
+        std::size_t out_features() const;
 
         mini_inference::tensor::Tensor forward(const mini_inference::tensor::Tensor &input) const;
 

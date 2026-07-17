@@ -33,7 +33,7 @@ namespace mini_inference::model
         std::size_t validate_and_derive_hidden_dim(const mini_inference::layers::Embedding &embedding,
                                                      const std::vector<mini_inference::layers::TransformerBlock> &blocks,
                                                      const mini_inference::layers::RmsNorm &final_norm,
-                                                     const mini_inference::layers::Linear &lm_head)
+                                                     const mini_inference::layers::LinearLayer &lm_head)
         {
             if (blocks.empty())
             {
@@ -54,12 +54,12 @@ namespace mini_inference::model
                 throw std::invalid_argument("final_norm dim does not match model hidden_dim");
             }
 
-            if (lm_head.in_features() != hidden_dim)
+            if (mini_inference::layers::in_features(lm_head) != hidden_dim)
             {
                 throw std::invalid_argument("lm_head in_features does not match model hidden_dim");
             }
 
-            if (lm_head.out_features() != embedding.vocab_size())
+            if (mini_inference::layers::out_features(lm_head) != embedding.vocab_size())
             {
                 throw std::invalid_argument("lm_head out_features does not match embedding vocab_size");
             }
@@ -72,7 +72,7 @@ namespace mini_inference::model
     Model::Model(mini_inference::layers::Embedding embedding,
                  std::vector<mini_inference::layers::TransformerBlock> blocks,
                  mini_inference::layers::RmsNorm final_norm,
-                 mini_inference::layers::Linear lm_head)
+                 mini_inference::layers::LinearLayer lm_head)
         : vocab_size_(embedding.vocab_size()),
           hidden_dim_(validate_and_derive_hidden_dim(embedding, blocks, final_norm, lm_head)),
           embedding_(std::move(embedding)),
@@ -112,7 +112,40 @@ namespace mini_inference::model
         }
 
         x = final_norm_.forward(x);
-        return lm_head_.forward(x);
+        return mini_inference::layers::forward(lm_head_, x);
+    }
+
+    mini_inference::tensor::Tensor Model::forward(const std::vector<std::size_t> &token_ids,
+                                                    std::vector<mini_inference::layers::KvCache> &caches) const
+    {
+        if (token_ids.empty())
+        {
+            throw std::invalid_argument("model forward requires at least one token id");
+        }
+        if (caches.size() != blocks_.size())
+        {
+            throw std::invalid_argument("caches.size() must match the number of transformer blocks");
+        }
+
+        mini_inference::tensor::Tensor x = embedding_.forward(token_ids);
+        for (std::size_t i = 0; i < blocks_.size(); ++i)
+        {
+            x = blocks_[i].forward(x, caches[i]);
+        }
+
+        x = final_norm_.forward(x);
+        return mini_inference::layers::forward(lm_head_, x);
+    }
+
+    std::vector<mini_inference::layers::KvCache> Model::make_kv_cache(std::size_t max_seq_len) const
+    {
+        std::vector<mini_inference::layers::KvCache> caches;
+        caches.reserve(blocks_.size());
+        for (std::size_t i = 0; i < blocks_.size(); ++i)
+        {
+            caches.emplace_back(max_seq_len, hidden_dim_);
+        }
+        return caches;
     }
 
     std::vector<std::size_t> Model::generate(std::vector<std::size_t> prompt_token_ids,
@@ -125,9 +158,14 @@ namespace mini_inference::model
         }
 
         std::vector<std::size_t> token_ids = std::move(prompt_token_ids);
+        std::vector<mini_inference::layers::KvCache> caches = make_kv_cache(token_ids.size() + max_new_tokens);
+
         for (std::size_t step = 0; step < max_new_tokens; ++step)
         {
-            const mini_inference::tensor::Tensor logits = forward(token_ids);
+            // Step 0 prefills the cache with the whole prompt; later steps only need to
+            // run the single most recently generated token against the populated cache.
+            const mini_inference::tensor::Tensor logits =
+                (step == 0) ? forward(token_ids, caches) : forward({token_ids.back()}, caches);
             const std::size_t next_token = argmax_last_row(logits);
             token_ids.push_back(next_token);
 

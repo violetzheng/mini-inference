@@ -87,4 +87,26 @@ namespace mini_inference::layers
         return add_residual(residual1, ffn_out);
     }
 
+    mini_inference::tensor::Tensor TransformerBlock::forward(const mini_inference::tensor::Tensor &input,
+                                                               KvCache &cache) const
+    {
+        if (input.rank() != 2)
+        {
+            throw std::invalid_argument("transformer block expects a 2D input tensor");
+        }
+
+        if (input.shape()[1] != hidden_dim_)
+        {
+            throw std::invalid_argument("input feature count does not match transformer block hidden_dim");
+        }
+
+        const mini_inference::tensor::Tensor normed1 = attn_norm_.forward(input);
+        const mini_inference::tensor::Tensor attn_out = attention_.forward(normed1, cache);
+        const mini_inference::tensor::Tensor residual1 = add_residual(input, attn_out);
+
+        const mini_inference::tensor::Tensor normed2 = ffn_norm_.forward(residual1);
+        const mini_inference::tensor::Tensor ffn_out = ffn_.forward(normed2);
+        return add_residual(residual1, ffn_out);
+    }
+
 } // namespace mini_inference::layers

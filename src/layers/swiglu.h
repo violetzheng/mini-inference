@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "layers/linear.h"
+#include "layers/linear_layer.h"
 #include "tensor/tensor.h"
 
 namespace mini_inference::layers
@@ -21,6 +22,10 @@ namespace mini_inference::layers
                std::vector<float> up_weights = {}, std::vector<float> up_bias = {},
                std::vector<float> down_weights = {}, std::vector<float> down_bias = {});
 
+        // Quantization-friendly overload: caller supplies already-built projections.
+        SwiGLU(std::size_t hidden_dim, std::size_t intermediate_dim,
+               LinearLayer gate_proj, LinearLayer up_proj, LinearLayer down_proj);
+
         std::size_t hidden_dim() const;
         std::size_t intermediate_dim() const;
 
@@ -30,9 +35,9 @@ namespace mini_inference::layers
         std::size_t hidden_dim_{0};
         std::size_t intermediate_dim_{0};
 
-        Linear gate_proj_;
-        Linear up_proj_;
-        Linear down_proj_;
+        LinearLayer gate_proj_;
+        LinearLayer up_proj_;
+        LinearLayer down_proj_;
     };
 
 } // namespace mini_inference::layers

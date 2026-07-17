@@ -28,6 +28,10 @@ namespace mini_inference::layers
         mini_inference::tensor::Tensor forward(const mini_inference::tensor::Tensor &input,
                                                 std::size_t position_offset = 0) const;
 
+        // Cache-aware path: forwards to attention_.forward(normed_input, cache).
+        mini_inference::tensor::Tensor forward(const mini_inference::tensor::Tensor &input,
+                                                KvCache &cache) const;
+
     private:
         std::size_t hidden_dim_{0};
         std::size_t num_heads_{0};

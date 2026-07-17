@@ -2,11 +2,14 @@
 #include "layers/attention.h"
 #include "layers/embedding.h"
 #include "layers/linear.h"
+#include "layers/linear_layer.h"
+#include "layers/quantized_linear.h"
 #include "layers/rms_norm.h"
 #include "layers/swiglu.h"
 #include "layers/transformer_block.h"
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,7 +23,9 @@ namespace mini_inference::loader
 
         using mini_inference::layers::Embedding;
         using mini_inference::layers::Linear;
+        using mini_inference::layers::LinearLayer;
         using mini_inference::layers::MultiHeadAttention;
+        using mini_inference::layers::QuantizedLinear;
         using mini_inference::layers::RmsNorm;
         using mini_inference::layers::SwiGLU;
         using mini_inference::layers::TransformerBlock;
@@ -52,6 +57,39 @@ namespace mini_inference::loader
         std::string block_prefix(std::size_t layer_index)
         {
             return "blk." + std::to_string(layer_index) + ".";
+        }
+
+        // Builds a projection's LinearLayer from its on-disk weight tensor, dispatching
+        // to Linear for F32/F16 weights or QuantizedLinear for Q8_0/Q4_0/Q4_K weights -
+        // real checkpoints mix these per-tensor, so this decision is made independently
+        // for every projection rather than once for the whole checkpoint. `weight_name`'s
+        // GGUF shape must be [in_features, out_features] (ne0 = in_features).
+        LinearLayer build_linear_layer(const GgufReader &reader, const std::string &weight_name,
+                                        const std::optional<std::string> &bias_name,
+                                        std::size_t in_features, std::size_t out_features)
+        {
+            const GgufTensorInfo &info = reader.tensor_info(weight_name);
+            if (info.shape != std::vector<std::size_t>{in_features, out_features})
+            {
+                throw std::invalid_argument("GGUF tensor '" + weight_name + "' has an unexpected shape");
+            }
+
+            std::vector<float> bias =
+                bias_name.has_value() ? optional_tensor(reader, *bias_name, {out_features}) : std::vector<float>{};
+
+            switch (static_cast<GgmlType>(info.ggml_type))
+            {
+            case GgmlType::kF32:
+            case GgmlType::kF16:
+                return LinearLayer(Linear(in_features, out_features, reader.tensor_as_f32(weight_name), std::move(bias)));
+            case GgmlType::kQ8_0:
+            case GgmlType::kQ4_0:
+            case GgmlType::kQ4_K:
+                return LinearLayer(QuantizedLinear(reader.tensor_as_quantized(weight_name), std::move(bias)));
+            default:
+                throw std::invalid_argument("GGUF tensor '" + weight_name + "' uses unsupported ggml type " +
+                                             std::to_string(info.ggml_type));
+            }
         }
 
     } // namespace
@@ -113,25 +151,22 @@ namespace mini_inference::loader
 
             MultiHeadAttention attention(
                 hidden_dim, num_heads, /*causal=*/true, rope_theta, max_position_embeddings,
-                required_tensor(reader, prefix + "attn_q.weight", {hidden_dim, hidden_dim}),
-                optional_tensor(reader, prefix + "attn_q.bias", {hidden_dim}),
-                required_tensor(reader, prefix + "attn_k.weight", {hidden_dim, hidden_dim}),
-                optional_tensor(reader, prefix + "attn_k.bias", {hidden_dim}),
-                required_tensor(reader, prefix + "attn_v.weight", {hidden_dim, hidden_dim}),
-                optional_tensor(reader, prefix + "attn_v.bias", {hidden_dim}),
-                required_tensor(reader, prefix + "attn_output.weight", {hidden_dim, hidden_dim}),
-                optional_tensor(reader, prefix + "attn_output.bias", {hidden_dim}));
+                build_linear_layer(reader, prefix + "attn_q.weight", prefix + "attn_q.bias", hidden_dim, hidden_dim),
+                build_linear_layer(reader, prefix + "attn_k.weight", prefix + "attn_k.bias", hidden_dim, hidden_dim),
+                build_linear_layer(reader, prefix + "attn_v.weight", prefix + "attn_v.bias", hidden_dim, hidden_dim),
+                build_linear_layer(reader, prefix + "attn_output.weight", prefix + "attn_output.bias", hidden_dim,
+                                    hidden_dim));
 
             RmsNorm ffn_norm(hidden_dim, rms_eps, required_tensor(reader, prefix + "ffn_norm.weight", {hidden_dim}));
 
             SwiGLU ffn(
                 hidden_dim, intermediate_dim,
-                required_tensor(reader, prefix + "ffn_gate.weight", {hidden_dim, intermediate_dim}),
-                optional_tensor(reader, prefix + "ffn_gate.bias", {intermediate_dim}),
-                required_tensor(reader, prefix + "ffn_up.weight", {hidden_dim, intermediate_dim}),
-                optional_tensor(reader, prefix + "ffn_up.bias", {intermediate_dim}),
-                required_tensor(reader, prefix + "ffn_down.weight", {intermediate_dim, hidden_dim}),
-                optional_tensor(reader, prefix + "ffn_down.bias", {hidden_dim}));
+                build_linear_layer(reader, prefix + "ffn_gate.weight", prefix + "ffn_gate.bias", hidden_dim,
+                                    intermediate_dim),
+                build_linear_layer(reader, prefix + "ffn_up.weight", prefix + "ffn_up.bias", hidden_dim,
+                                    intermediate_dim),
+                build_linear_layer(reader, prefix + "ffn_down.weight", prefix + "ffn_down.bias", intermediate_dim,
+                                    hidden_dim));
 
             blocks.emplace_back(std::move(attn_norm), std::move(attention), std::move(ffn_norm), std::move(ffn));
         }
@@ -139,10 +174,9 @@ namespace mini_inference::loader
         RmsNorm final_norm(hidden_dim, rms_eps, required_tensor(reader, "output_norm.weight", {hidden_dim}));
 
         // Tied embeddings: small checkpoints often omit output.weight entirely.
-        std::vector<float> lm_head_weights = reader.has_tensor("output.weight")
-                                                  ? required_tensor(reader, "output.weight", {hidden_dim, vocab_size})
-                                                  : token_embedding;
-        Linear lm_head(hidden_dim, vocab_size, std::move(lm_head_weights), {});
+        LinearLayer lm_head = reader.has_tensor("output.weight")
+                                   ? build_linear_layer(reader, "output.weight", std::nullopt, hidden_dim, vocab_size)
+                                   : LinearLayer(Linear(hidden_dim, vocab_size, token_embedding, {}));
 
         return Model(std::move(embedding), std::move(blocks), std::move(final_norm), std::move(lm_head));
     }

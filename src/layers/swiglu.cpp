@@ -44,10 +44,29 @@ namespace mini_inference::layers
                    std::vector<float> down_weights, std::vector<float> down_bias)
         : hidden_dim_(validate_dim(hidden_dim, "hidden_dim")),
           intermediate_dim_(validate_dim(intermediate_dim, "intermediate_dim")),
-          gate_proj_(hidden_dim_, intermediate_dim_, std::move(gate_weights), std::move(gate_bias)),
-          up_proj_(hidden_dim_, intermediate_dim_, std::move(up_weights), std::move(up_bias)),
-          down_proj_(intermediate_dim_, hidden_dim_, std::move(down_weights), std::move(down_bias))
+          gate_proj_(Linear(hidden_dim_, intermediate_dim_, std::move(gate_weights), std::move(gate_bias))),
+          up_proj_(Linear(hidden_dim_, intermediate_dim_, std::move(up_weights), std::move(up_bias))),
+          down_proj_(Linear(intermediate_dim_, hidden_dim_, std::move(down_weights), std::move(down_bias)))
     {
+    }
+
+    SwiGLU::SwiGLU(std::size_t hidden_dim, std::size_t intermediate_dim,
+                   LinearLayer gate_proj, LinearLayer up_proj, LinearLayer down_proj)
+        : hidden_dim_(validate_dim(hidden_dim, "hidden_dim")),
+          intermediate_dim_(validate_dim(intermediate_dim, "intermediate_dim")),
+          gate_proj_(std::move(gate_proj)),
+          up_proj_(std::move(up_proj)),
+          down_proj_(std::move(down_proj))
+    {
+        if (mini_inference::layers::in_features(gate_proj_) != hidden_dim_ ||
+            mini_inference::layers::out_features(gate_proj_) != intermediate_dim_ ||
+            mini_inference::layers::in_features(up_proj_) != hidden_dim_ ||
+            mini_inference::layers::out_features(up_proj_) != intermediate_dim_ ||
+            mini_inference::layers::in_features(down_proj_) != intermediate_dim_ ||
+            mini_inference::layers::out_features(down_proj_) != hidden_dim_)
+        {
+            throw std::invalid_argument("swiglu projection dimensions do not match hidden_dim/intermediate_dim");
+        }
     }
 
     std::size_t SwiGLU::hidden_dim() const
@@ -73,15 +92,15 @@ namespace mini_inference::layers
             throw std::invalid_argument("input feature count does not match swiglu hidden_dim");
         }
 
-        const mini_inference::tensor::Tensor gate = gate_proj_.forward(input);
-        const mini_inference::tensor::Tensor up = up_proj_.forward(input);
+        const mini_inference::tensor::Tensor gate = mini_inference::layers::forward(gate_proj_, input);
+        const mini_inference::tensor::Tensor up = mini_inference::layers::forward(up_proj_, input);
         assert(gate.numel() == up.numel());
 
         std::vector<float> fused(gate.numel());
         fused_silu_mul(gate.values().data(), up.values().data(), fused.data(), fused.size());
 
         const mini_inference::tensor::Tensor fused_tensor({shape[0], intermediate_dim_}, std::move(fused));
-        return down_proj_.forward(fused_tensor);
+        return mini_inference::layers::forward(down_proj_, fused_tensor);
     }
 
 } // namespace mini_inference::layers

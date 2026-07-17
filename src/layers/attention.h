@@ -3,7 +3,9 @@
 #include <cstddef>
 #include <vector>
 
+#include "layers/kv_cache.h"
 #include "layers/linear.h"
+#include "layers/linear_layer.h"
 #include "layers/rope.h"
 #include "layers/softmax.h"
 #include "tensor/tensor.h"
@@ -25,6 +27,14 @@ namespace mini_inference::layers
                             std::vector<float> v_weights = {}, std::vector<float> v_bias = {},
                             std::vector<float> o_weights = {}, std::vector<float> o_bias = {});
 
+        // Cache-friendly / quantization-friendly overload: caller supplies already-built
+        // projections (each independently Linear or QuantizedLinear), e.g. from a GGUF
+        // loader that decides per-tensor whether a projection's weights are quantized.
+        MultiHeadAttention(std::size_t hidden_dim, std::size_t num_heads, bool causal,
+                            float rope_theta, std::size_t max_position_embeddings,
+                            LinearLayer q_proj, LinearLayer k_proj,
+                            LinearLayer v_proj, LinearLayer o_proj);
+
         std::size_t hidden_dim() const;
         std::size_t num_heads() const;
         std::size_t head_dim() const;
@@ -36,16 +46,24 @@ namespace mini_inference::layers
         mini_inference::tensor::Tensor forward(const mini_inference::tensor::Tensor &input,
                                                 std::size_t position_offset = 0) const;
 
+        // Cache-aware path: appends this step's rotated keys and raw values into `cache`
+        // (at position cache.length()), then attends `input`'s queries against every
+        // position cached so far, not just `input` itself. Used for prefill (input holds
+        // the whole prompt, cache starts empty) and single-token decode (input is one row,
+        // cache already holds every earlier position) alike.
+        mini_inference::tensor::Tensor forward(const mini_inference::tensor::Tensor &input,
+                                                KvCache &cache) const;
+
     private:
         std::size_t hidden_dim_{0};
         std::size_t num_heads_{0};
         std::size_t head_dim_{0};
         bool causal_{true};
 
-        Linear q_proj_;
-        Linear k_proj_;
-        Linear v_proj_;
-        Linear o_proj_;
+        LinearLayer q_proj_;
+        LinearLayer k_proj_;
+        LinearLayer v_proj_;
+        LinearLayer o_proj_;
         RoPE rope_;
         Softmax softmax_;
     };

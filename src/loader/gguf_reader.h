@@ -7,8 +7,32 @@
 #include <variant>
 #include <vector>
 
+#include "tensor/quantized_tensor.h"
+
 namespace mini_inference::loader
 {
+
+    // GGML on-disk tensor element type tags (matches ggml's `enum ggml_type` values).
+    // Only F32/F16/Q8_0/Q4_0/Q4_K are currently decodable (see tensor_as_f32 /
+    // tensor_as_quantized); the rest are named here so unsupported-type errors can
+    // report a recognizable name instead of a bare integer.
+    enum class GgmlType : std::uint32_t
+    {
+        kF32 = 0,
+        kF16 = 1,
+        kQ4_0 = 2,
+        kQ4_1 = 3,
+        kQ5_0 = 6,
+        kQ5_1 = 7,
+        kQ8_0 = 8,
+        kQ8_1 = 9,
+        kQ2_K = 10,
+        kQ3_K = 11,
+        kQ4_K = 12,
+        kQ5_K = 13,
+        kQ6_K = 14,
+        kQ8_K = 15,
+    };
 
     // GGUF metadata value type tags (matches the on-disk uint32 enum).
     enum class GgufValueType : std::uint32_t
@@ -76,6 +100,10 @@ namespace mini_inference::loader
 
         // Converts to float32 from F32/F16; throws for any other ggml_type.
         std::vector<float> tensor_as_f32(const std::string &name) const;
+
+        // Copies the tensor's on-disk quantized blocks as-is (no dequantization) into a
+        // QuantizedTensor; throws for any ggml_type other than Q8_0/Q4_0/Q4_K.
+        mini_inference::tensor::QuantizedTensor tensor_as_quantized(const std::string &name) const;
 
     private:
         void parse();

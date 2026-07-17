@@ -8,10 +8,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(mini_inference_core
     src/tensor/matrix.cpp
     src/tensor/tensor.cpp
+    src/tensor/half_float.cpp
+    src/tensor/quant_blocks.cpp
+    src/tensor/quantized_tensor.cpp
     src/layers/linear.cpp
+    src/layers/quantized_linear.cpp
+    src/layers/linear_layer.cpp
     src/layers/rms_norm.cpp
     src/layers/softmax.cpp
     src/layers/rope.cpp
+    src/layers/kv_cache.cpp
     src/layers/attention.cpp
     src/layers/swiglu.cpp
     src/layers/transformer_block.cpp
@@ -55,6 +61,27 @@ add_executable(test_linear
 target_link_libraries(test_linear PRIVATE mini_inference_core)
 target_include_directories(test_linear PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(test_quant_blocks
+    tests/test_quant_blocks.cpp
+)
+
+target_link_libraries(test_quant_blocks PRIVATE mini_inference_core)
+target_include_directories(test_quant_blocks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_quantized_tensor
+    tests/test_quantized_tensor.cpp
+)
+
+target_link_libraries(test_quantized_tensor PRIVATE mini_inference_core)
+target_include_directories(test_quantized_tensor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_quantized_linear
+    tests/test_quantized_linear.cpp
+)
+
+target_link_libraries(test_quantized_linear PRIVATE mini_inference_core)
+target_include_directories(test_quantized_linear PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_executable(test_rms_norm
     tests/test_rms_norm.cpp
 )
@@ -82,6 +109,13 @@ add_executable(test_attention
 
 target_link_libraries(test_attention PRIVATE mini_inference_core)
 target_include_directories(test_attention PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_kv_cache
+    tests/test_kv_cache.cpp
+)
+
+target_link_libraries(test_kv_cache PRIVATE mini_inference_core)
+target_include_directories(test_kv_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_executable(test_swiglu
     tests/test_swiglu.cpp
@@ -163,10 +197,14 @@ target_include_directories(test_gguf_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 add_test(NAME matrix COMMAND test_matrix)
 add_test(NAME tensor COMMAND test_tensor)
 add_test(NAME linear COMMAND test_linear)
+add_test(NAME quant_blocks COMMAND test_quant_blocks)
+add_test(NAME quantized_tensor COMMAND test_quantized_tensor)
+add_test(NAME quantized_linear COMMAND test_quantized_linear)
 add_test(NAME rms_norm COMMAND test_rms_norm)
 add_test(NAME softmax COMMAND test_softmax)
 add_test(NAME rope COMMAND test_rope)
 add_test(NAME attention COMMAND test_attention)
+add_test(NAME kv_cache COMMAND test_kv_cache)
 add_test(NAME swiglu COMMAND test_swiglu)
 add_test(NAME transformer_block COMMAND test_transformer_block)
 add_test(NAME embedding COMMAND test_embedding)

@@ -1,5 +1,7 @@
 #include "loader/gguf_reader.h"
 
+#include "tensor/half_float.h"
+
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -18,46 +20,6 @@ namespace mini_inference::loader
                 return value;
             }
             return ((value + alignment - 1) / alignment) * alignment;
-        }
-
-        // IEEE 754 binary16 -> binary32, handling zero/subnormal/inf/nan.
-        float f16_to_f32(std::uint16_t half)
-        {
-            const std::uint32_t sign = static_cast<std::uint32_t>(half & 0x8000) << 16;
-            std::uint32_t exponent = (half >> 10) & 0x1F;
-            std::uint32_t mantissa = half & 0x3FF;
-            std::uint32_t bits;
-
-            if (exponent == 0)
-            {
-                if (mantissa == 0)
-                {
-                    bits = sign;
-                }
-                else
-                {
-                    exponent = 127 - 15 + 1;
-                    while ((mantissa & 0x400) == 0)
-                    {
-                        mantissa <<= 1;
-                        --exponent;
-                    }
-                    mantissa &= 0x3FF;
-                    bits = sign | (exponent << 23) | (mantissa << 13);
-                }
-            }
-            else if (exponent == 0x1F)
-            {
-                bits = sign | 0x7F800000u | (mantissa << 13);
-            }
-            else
-            {
-                bits = sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
-            }
-
-            float result;
-            std::memcpy(&result, &bits, sizeof(float));
-            return result;
         }
 
         std::size_t element_count_of(const std::vector<std::size_t> &shape)
@@ -411,13 +373,61 @@ namespace mini_inference::loader
             {
                 std::uint16_t half;
                 std::memcpy(&half, buffer_.data() + info.data_offset + i * sizeof(std::uint16_t), sizeof(std::uint16_t));
-                values[i] = f16_to_f32(half);
+                values[i] = mini_inference::tensor::f16_to_f32(half);
             }
             return values;
         }
 
         throw std::invalid_argument("GGUF tensor '" + name + "' uses unsupported ggml type " +
                                      std::to_string(info.ggml_type) + " (only F32=0 and F16=1 are supported)");
+    }
+
+    mini_inference::tensor::QuantizedTensor GgufReader::tensor_as_quantized(const std::string &name) const
+    {
+        const GgufTensorInfo &info = tensor_info(name);
+
+        mini_inference::tensor::QuantFormat format;
+        switch (static_cast<GgmlType>(info.ggml_type))
+        {
+        case GgmlType::kQ8_0:
+            format = mini_inference::tensor::QuantFormat::Q8_0;
+            break;
+        case GgmlType::kQ4_0:
+            format = mini_inference::tensor::QuantFormat::Q4_0;
+            break;
+        case GgmlType::kQ4_K:
+            format = mini_inference::tensor::QuantFormat::Q4_K;
+            break;
+        default:
+            throw std::invalid_argument("GGUF tensor '" + name + "' uses unsupported ggml type " +
+                                         std::to_string(info.ggml_type) +
+                                         " (only Q8_0=8, Q4_0=2 and Q4_K=12 are supported)");
+        }
+
+        if (info.shape.size() != 2)
+        {
+            throw std::invalid_argument("GGUF tensor '" + name + "' must be 2D to be read as a quantized matrix");
+        }
+
+        // info.shape is [ne0, ne1] = [in_features, out_features] (ne0 is the fastest-varying
+        // / contiguous axis); QuantizedTensor stores [rows, cols] = [out_features, in_features]
+        // to match Linear's row-major weight layout.
+        const std::size_t in_features = info.shape[0];
+        const std::size_t out_features = info.shape[1];
+
+        const std::size_t block_elems = mini_inference::tensor::block_size(format);
+        if (in_features % block_elems != 0)
+        {
+            throw std::invalid_argument("GGUF tensor '" + name + "' in_features is not a multiple of the block size");
+        }
+        const std::size_t blocks_per_row = in_features / block_elems;
+        const std::size_t total_bytes = out_features * blocks_per_row * mini_inference::tensor::block_byte_size(format);
+
+        require(info.data_offset, total_bytes);
+        std::vector<std::byte> blocks(total_bytes);
+        std::memcpy(blocks.data(), buffer_.data() + info.data_offset, total_bytes);
+
+        return mini_inference::tensor::QuantizedTensor(format, out_features, in_features, std::move(blocks));
     }
 
 } // namespace mini_inference::loader

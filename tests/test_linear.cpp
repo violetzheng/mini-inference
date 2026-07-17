@@ -32,6 +32,32 @@ namespace
         }
     }
 
+    // out_features well above parallel_for's threading threshold, so this exercises the
+    // multithreaded path (not just the small-range inline fallback the test above takes).
+    // All-ones weights and zero bias make every row's expected output simply sum(input).
+    void test_large_out_features_uses_threaded_path()
+    {
+        constexpr std::size_t kInFeatures = 8;
+        constexpr std::size_t kOutFeatures = 200;
+
+        const std::vector<float> weights(kInFeatures * kOutFeatures, 1.0f);
+        Linear layer(kInFeatures, kOutFeatures, weights, {});
+
+        const std::vector<float> input_values = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
+        const float expected_sum = 36.0f; // 1+2+...+8
+
+        Tensor input({1, kInFeatures}, input_values);
+        Tensor output = layer.forward(input);
+
+        expect(output.shape()[0] == 1, "large out_features batch size");
+        expect(output.shape()[1] == kOutFeatures, "large out_features output size");
+        for (std::size_t out_idx = 0; out_idx < kOutFeatures; ++out_idx)
+        {
+            expect_close(output.at({0, out_idx}), expected_sum,
+                         "large out_features row " + std::to_string(out_idx));
+        }
+    }
+
 } // namespace
 
 int main()
@@ -59,6 +85,8 @@ int main()
         threw = true;
     }
     expect(threw, "shape mismatch throws");
+
+    test_large_out_features_uses_threaded_path();
 
     if (failures != 0)
     {

@@ -1,5 +1,7 @@
 #include "layers/transformer_block.h"
 
+#include "tensor/simd_ops.h"
+
 #include <cassert>
 #include <stdexcept>
 #include <vector>
@@ -27,12 +29,7 @@ namespace mini_inference::layers
             assert(a.shape() == b.shape());
 
             std::vector<float> sum(a.numel());
-            const std::vector<float> &a_values = a.values();
-            const std::vector<float> &b_values = b.values();
-            for (std::size_t i = 0; i < sum.size(); ++i)
-            {
-                sum[i] = a_values[i] + b_values[i];
-            }
+            mini_inference::tensor::vector_add_f32(a.values().data(), b.values().data(), sum.data(), sum.size());
             return mini_inference::tensor::Tensor(a.shape(), std::move(sum));
         }
 

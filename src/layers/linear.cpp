@@ -1,5 +1,8 @@
 #include "layers/linear.h"
 
+#include "tensor/parallel_for.h"
+#include "tensor/simd_ops.h"
+
 #include <cassert>
 #include <stdexcept>
 
@@ -80,20 +83,18 @@ namespace mini_inference::layers
         const std::size_t batch_size = shape[0];
         std::vector<float> output_values(batch_size * out_features_, 0.0f);
 
-        for (std::size_t batch = 0; batch < batch_size; ++batch)
-        {
-            for (std::size_t out_idx = 0; out_idx < out_features_; ++out_idx)
+        mini_inference::tensor::parallel_for(0, out_features_, [&](std::size_t out_begin, std::size_t out_end) {
+            for (std::size_t batch = 0; batch < batch_size; ++batch)
             {
-                float sum = bias_[out_idx];
-                for (std::size_t in_idx = 0; in_idx < in_features_; ++in_idx)
+                const float *input_row = input.values().data() + batch * in_features_;
+                for (std::size_t out_idx = out_begin; out_idx < out_end; ++out_idx)
                 {
-                    const std::size_t flat_input_index = batch * in_features_ + in_idx;
-                    const std::size_t weight_index = out_idx * in_features_ + in_idx;
-                    sum += input.at(flat_input_index) * weights_[weight_index];
+                    const float *weight_row = weights_.data() + out_idx * in_features_;
+                    output_values[batch * out_features_ + out_idx] =
+                        bias_[out_idx] + mini_inference::tensor::dot_product_f32(input_row, weight_row, in_features_);
                 }
-                output_values[batch * out_features_ + out_idx] = sum;
             }
-        }
+        });
 
         return mini_inference::tensor::Tensor({batch_size, out_features_}, std::move(output_values));
     }

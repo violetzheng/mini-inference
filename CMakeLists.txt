@@ -5,12 +5,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 add_library(mini_inference_core
     src/tensor/matrix.cpp
     src/tensor/tensor.cpp
     src/tensor/half_float.cpp
     src/tensor/quant_blocks.cpp
     src/tensor/quantized_tensor.cpp
+    src/tensor/simd_ops.cpp
+    src/tensor/parallel_for.cpp
     src/layers/linear.cpp
     src/layers/quantized_linear.cpp
     src/layers/linear_layer.cpp
@@ -37,6 +42,7 @@ target_include_directories(mini_inference_core
 )
 
 target_compile_options(mini_inference_core PRIVATE -O3 -march=native)
+target_link_libraries(mini_inference_core PUBLIC Threads::Threads)
 
 enable_testing()
 
@@ -74,6 +80,20 @@ add_executable(test_quantized_tensor
 
 target_link_libraries(test_quantized_tensor PRIVATE mini_inference_core)
 target_include_directories(test_quantized_tensor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_simd_ops
+    tests/test_simd_ops.cpp
+)
+
+target_link_libraries(test_simd_ops PRIVATE mini_inference_core)
+target_include_directories(test_simd_ops PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(test_parallel_for
+    tests/test_parallel_for.cpp
+)
+
+target_link_libraries(test_parallel_for PRIVATE mini_inference_core)
+target_include_directories(test_parallel_for PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_executable(test_quantized_linear
     tests/test_quantized_linear.cpp
@@ -199,6 +219,8 @@ add_test(NAME tensor COMMAND test_tensor)
 add_test(NAME linear COMMAND test_linear)
 add_test(NAME quant_blocks COMMAND test_quant_blocks)
 add_test(NAME quantized_tensor COMMAND test_quantized_tensor)
+add_test(NAME simd_ops COMMAND test_simd_ops)
+add_test(NAME parallel_for COMMAND test_parallel_for)
 add_test(NAME quantized_linear COMMAND test_quantized_linear)
 add_test(NAME rms_norm COMMAND test_rms_norm)
 add_test(NAME softmax COMMAND test_softmax)

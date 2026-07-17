@@ -1,5 +1,7 @@
 #include "layers/attention.h"
 
+#include "tensor/simd_ops.h"
+
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -153,11 +155,8 @@ namespace mini_inference::layers
                         continue;
                     }
 
-                    float dot = 0.0f;
-                    for (std::size_t d = 0; d < head_dim_; ++d)
-                    {
-                        dot += q_head.at({i, d}) * k_head.at({j, d});
-                    }
+                    const float dot = mini_inference::tensor::dot_product_f32(
+                        q_head.values().data() + i * head_dim_, k_head.values().data() + j * head_dim_, head_dim_);
 
                     // how much should token i pay attention to token j
                     scores.at({i, j}) = dot * scale;
@@ -168,14 +167,11 @@ namespace mini_inference::layers
 
             for (std::size_t i = 0; i < seq_len; ++i)
             {
-                for (std::size_t d = 0; d < head_dim_; ++d)
+                float *out_row = merged_values.data() + i * hidden_dim_ + head * head_dim_;
+                for (std::size_t j = 0; j < seq_len; ++j)
                 {
-                    float sum = 0.0f;
-                    for (std::size_t j = 0; j < seq_len; ++j)
-                    {
-                        sum += attn.at({i, j}) * v_head.at({j, d});
-                    }
-                    merged_values[i * hidden_dim_ + head * head_dim_ + d] = sum;
+                    mini_inference::tensor::axpy_f32(attn.at({i, j}), v_head.values().data() + j * head_dim_,
+                                                       out_row, head_dim_);
                 }
             }
         }
@@ -260,11 +256,8 @@ namespace mini_inference::layers
                         continue;
                     }
 
-                    float dot = 0.0f;
-                    for (std::size_t d = 0; d < head_dim_; ++d)
-                    {
-                        dot += q_head.at({i, d}) * k_head.at({j, d});
-                    }
+                    const float dot = mini_inference::tensor::dot_product_f32(
+                        q_head.values().data() + i * head_dim_, k_head.values().data() + j * head_dim_, head_dim_);
 
                     scores.at({i, j}) = dot * scale;
                 }
@@ -274,14 +267,11 @@ namespace mini_inference::layers
 
             for (std::size_t i = 0; i < num_new; ++i)
             {
-                for (std::size_t d = 0; d < head_dim_; ++d)
+                float *out_row = merged_values.data() + i * hidden_dim_ + head * head_dim_;
+                for (std::size_t j = 0; j < total_len; ++j)
                 {
-                    float sum = 0.0f;
-                    for (std::size_t j = 0; j < total_len; ++j)
-                    {
-                        sum += attn.at({i, j}) * v_head.at({j, d});
-                    }
-                    merged_values[i * hidden_dim_ + head * head_dim_ + d] = sum;
+                    mini_inference::tensor::axpy_f32(attn.at({i, j}), v_head.values().data() + j * head_dim_,
+                                                       out_row, head_dim_);
                 }
             }
         }

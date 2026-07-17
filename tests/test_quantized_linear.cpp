@@ -71,6 +71,26 @@ namespace
         return weights;
     }
 
+    // `rows` Q8_0 rows of 32 elements each, every quant = 1 with d = 1.0, so every
+    // dequantized row is all-ones. Used to exercise parallel_for's multithreaded path
+    // (out_features well above its threading threshold) with an easily-verified result.
+    QuantizedTensor many_row_q8_0_weights(std::size_t rows)
+    {
+        std::vector<std::byte> single_row = make_bytes({0x00, 0x3C}); // d = 1.0 (fp16 0x3C00)
+        for (int i = 0; i < 32; ++i)
+        {
+            single_row.push_back(static_cast<std::byte>(1));
+        }
+
+        std::vector<std::byte> blocks;
+        blocks.reserve(single_row.size() * rows);
+        for (std::size_t r = 0; r < rows; ++r)
+        {
+            blocks.insert(blocks.end(), single_row.begin(), single_row.end());
+        }
+        return QuantizedTensor(QuantFormat::Q8_0, rows, 32, std::move(blocks));
+    }
+
 } // namespace
 
 int main()
@@ -114,6 +134,20 @@ int main()
         threw_bad_bias = true;
     }
     expect(threw_bad_bias, "bias count mismatch throws");
+
+    {
+        constexpr std::size_t kOutFeatures = 200;
+        QuantizedLinear many_rows(many_row_q8_0_weights(kOutFeatures), {});
+        Tensor ones_input({1, 32}, std::vector<float>(32, 1.0f));
+        Tensor many_output = many_rows.forward(ones_input);
+
+        expect(many_output.shape()[1] == kOutFeatures, "large out_features output size");
+        for (std::size_t out_idx = 0; out_idx < kOutFeatures; ++out_idx)
+        {
+            expect_close(many_output.at({0, out_idx}), 32.0f,
+                         "large out_features row " + std::to_string(out_idx));
+        }
+    }
 
     if (failures != 0)
     {

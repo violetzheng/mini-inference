@@ -1,5 +1,7 @@
 #include "layers/rms_norm.h"
 
+#include "tensor/simd_ops.h"
+
 #include <cmath>
 #include <stdexcept>
 
@@ -56,18 +58,12 @@ namespace mini_inference::layers
 
         for (std::size_t batch = 0; batch < batch_size; ++batch)
         {
-            float sum_squares = 0.0f;
-            for (std::size_t feature = 0; feature < dim_; ++feature)
-            {
-                const float value = input.at({batch, feature});
-                sum_squares += value * value;
-            }
+            const float *row = input.values().data() + batch * dim_;
+            const float sum_squares = mini_inference::tensor::dot_product_f32(row, row, dim_);
 
             const float rms = std::sqrt(sum_squares / static_cast<float>(dim_) + eps_);
-            for (std::size_t feature = 0; feature < dim_; ++feature)
-            {
-                output_values[batch * dim_ + feature] = (input.at({batch, feature}) / rms) * gamma_[feature];
-            }
+            mini_inference::tensor::scale_mul_f32(row, gamma_.data(), 1.0f / rms,
+                                                    output_values.data() + batch * dim_, dim_);
         }
 
         return mini_inference::tensor::Tensor({batch_size, dim_}, std::move(output_values));

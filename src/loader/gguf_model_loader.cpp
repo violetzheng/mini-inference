@@ -112,13 +112,8 @@ namespace mini_inference::loader
         const float rope_theta = reader.metadata_float("llama.rope.freq_base", 10000.0f);
         const std::size_t max_position_embeddings = reader.metadata_uint32("llama.context_length", 2048);
 
-        if (num_kv_heads != num_heads)
-        {
-            throw std::invalid_argument("GGUF checkpoint uses grouped-query attention (head_count=" +
-                                         std::to_string(num_heads) + ", head_count_kv=" +
-                                         std::to_string(num_kv_heads) +
-                                         "), which MultiHeadAttention does not support");
-        }
+        const std::size_t head_dim = num_heads == 0 ? 0 : hidden_dim / num_heads;
+        const std::size_t kv_dim = static_cast<std::size_t>(num_kv_heads) * head_dim;
 
         const GgufTensorInfo &token_embd_info = reader.tensor_info("token_embd.weight");
         if (token_embd_info.shape.size() != 2 || token_embd_info.shape[0] != hidden_dim)
@@ -152,10 +147,11 @@ namespace mini_inference::loader
             MultiHeadAttention attention(
                 hidden_dim, num_heads, /*causal=*/true, rope_theta, max_position_embeddings,
                 build_linear_layer(reader, prefix + "attn_q.weight", prefix + "attn_q.bias", hidden_dim, hidden_dim),
-                build_linear_layer(reader, prefix + "attn_k.weight", prefix + "attn_k.bias", hidden_dim, hidden_dim),
-                build_linear_layer(reader, prefix + "attn_v.weight", prefix + "attn_v.bias", hidden_dim, hidden_dim),
+                build_linear_layer(reader, prefix + "attn_k.weight", prefix + "attn_k.bias", hidden_dim, kv_dim),
+                build_linear_layer(reader, prefix + "attn_v.weight", prefix + "attn_v.bias", hidden_dim, kv_dim),
                 build_linear_layer(reader, prefix + "attn_output.weight", prefix + "attn_output.bias", hidden_dim,
-                                    hidden_dim));
+                                    hidden_dim),
+                num_kv_heads);
 
             RmsNorm ffn_norm(hidden_dim, rms_eps, required_tensor(reader, prefix + "ffn_norm.weight", {hidden_dim}));
 

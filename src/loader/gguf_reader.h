@@ -94,6 +94,7 @@ namespace mini_inference::loader
         std::uint32_t metadata_uint32(const std::string &key, std::uint32_t default_value) const;
         float metadata_float(const std::string &key, float default_value) const;
         std::vector<std::string> metadata_string_array(const std::string &key) const;
+        std::vector<float> metadata_float_array(const std::string &key) const;
 
         bool has_tensor(const std::string &name) const;
         const GgufTensorInfo &tensor_info(const std::string &name) const;

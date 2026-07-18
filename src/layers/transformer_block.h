@@ -22,6 +22,7 @@ namespace mini_inference::layers
         std::size_t hidden_dim() const;
         std::size_t num_heads() const;
         std::size_t intermediate_dim() const;
+        std::size_t kv_dim() const;
 
         // position_offset is forwarded to attention/RoPE unchanged, the same future
         // KV-cache extension point RoPE/MultiHeadAttention already document.

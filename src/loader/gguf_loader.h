@@ -4,8 +4,8 @@
 #include <optional>
 #include <string>
 
+#include "loader/gguf_tokenizer_loader.h"
 #include "model/model.h"
-#include "tokenizer/bpe_tokenizer.h"
 
 namespace mini_inference::loader
 {
@@ -13,7 +13,7 @@ namespace mini_inference::loader
     struct GgufCheckpoint
     {
         mini_inference::model::Model model;
-        mini_inference::tokenizer::BpeTokenizer tokenizer;
+        Tokenizer tokenizer;
         std::optional<std::size_t> bos_token_id;
         std::optional<std::size_t> eos_token_id;
     };

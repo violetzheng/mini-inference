@@ -29,6 +29,7 @@ add_library(mini_inference_core
     src/layers/embedding.cpp
     src/model/model.cpp
     src/tokenizer/bpe_tokenizer.cpp
+    src/tokenizer/sentencepiece_tokenizer.cpp
     src/loader/gguf_reader.cpp
     src/loader/gpt2_byte_encoding.cpp
     src/loader/gguf_model_loader.cpp
@@ -179,6 +180,13 @@ add_executable(test_bpe_tokenizer
 target_link_libraries(test_bpe_tokenizer PRIVATE mini_inference_core)
 target_include_directories(test_bpe_tokenizer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(test_sentencepiece_tokenizer
+    tests/test_sentencepiece_tokenizer.cpp
+)
+
+target_link_libraries(test_sentencepiece_tokenizer PRIVATE mini_inference_core)
+target_include_directories(test_sentencepiece_tokenizer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_executable(test_gguf_reader
     tests/test_gguf_reader.cpp
 )
@@ -233,6 +241,7 @@ add_test(NAME embedding COMMAND test_embedding)
 add_test(NAME model COMMAND test_model)
 add_test(NAME generate COMMAND test_generate)
 add_test(NAME bpe_tokenizer COMMAND test_bpe_tokenizer)
+add_test(NAME sentencepiece_tokenizer COMMAND test_sentencepiece_tokenizer)
 add_test(NAME gguf_reader COMMAND test_gguf_reader)
 add_test(NAME gpt2_byte_encoding COMMAND test_gpt2_byte_encoding)
 add_test(NAME gguf_model_loader COMMAND test_gguf_model_loader)

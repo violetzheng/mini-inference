@@ -143,7 +143,7 @@ namespace mini_inference::model
         caches.reserve(blocks_.size());
         for (std::size_t i = 0; i < blocks_.size(); ++i)
         {
-            caches.emplace_back(max_seq_len, hidden_dim_);
+            caches.emplace_back(max_seq_len, blocks_[i].kv_dim());
         }
         return caches;
     }

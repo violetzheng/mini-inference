@@ -172,27 +172,60 @@ int main()
         expect(threw, "unsupported architecture throws invalid_argument");
     }
 
-    // --- grouped-query attention (head_count_kv != head_count) ---
+    // --- grouped-query attention (head_count_kv != head_count) loads successfully,
+    // with attn_k/attn_v shaped [hidden_dim, num_kv_heads*head_dim] rather than
+    // [hidden_dim, hidden_dim] ---
     {
         GgufBufferBuilder builder;
         builder.add_string_kv("general.architecture", "llama");
-        builder.add_uint32_kv("llama.embedding_length", 2);
+        builder.add_uint32_kv("llama.embedding_length", 4);
         builder.add_uint32_kv("llama.block_count", 1);
         builder.add_uint32_kv("llama.feed_forward_length", 1);
         builder.add_uint32_kv("llama.attention.head_count", 2);
         builder.add_uint32_kv("llama.attention.head_count_kv", 1);
+        builder.add_float32_kv("llama.attention.layer_norm_rms_epsilon", 1e-5f);
+        builder.add_float32_kv("llama.rope.freq_base", 10000.0f);
+        builder.add_uint32_kv("llama.context_length", 8);
+
+        builder.add_tensor_f32("token_embd.weight", {4, 2}, {1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f});
+
+        builder.add_tensor_f32("blk.0.attn_norm.weight", {4}, {1.0f, 1.0f, 1.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_q.weight", {4, 4},
+                                {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f});
+        // kv_dim = num_kv_heads(1) * head_dim(2) = 2, narrower than hidden_dim.
+        builder.add_tensor_f32("blk.0.attn_k.weight", {4, 2}, {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f});
+        builder.add_tensor_f32("blk.0.attn_v.weight", {4, 2}, {0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_output.weight", {4, 4},
+                                {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f});
+
+        builder.add_tensor_f32("blk.0.ffn_norm.weight", {4}, {1.0f, 1.0f, 1.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.ffn_gate.weight", {4, 1}, {1.0f, 0.0f, 0.0f, 0.0f});
+        builder.add_tensor_f32("blk.0.ffn_up.weight", {4, 1}, {0.0f, 1.0f, 0.0f, 0.0f});
+        builder.add_tensor_f32("blk.0.ffn_down.weight", {1, 4}, {1.0f, 1.0f, 1.0f, 1.0f});
+
+        builder.add_tensor_f32("output_norm.weight", {4}, {1.0f, 1.0f, 1.0f, 1.0f});
+        builder.add_tensor_f32("output.weight", {4, 2}, {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f});
+
         GgufReader reader(builder.build());
+        Model model = mini_inference::loader::build_model(reader);
+
+        expect(model.hidden_dim() == 4, "gqa checkpoint has the expected hidden_dim");
 
         bool threw = false;
+        Tensor output;
         try
         {
-            (void)mini_inference::loader::build_model(reader);
+            output = model.forward({0});
         }
-        catch (const std::invalid_argument &)
+        catch (const std::exception &)
         {
             threw = true;
         }
-        expect(threw, "grouped-query attention checkpoint throws invalid_argument");
+        expect(!threw, "gqa checkpoint's forward pass does not throw");
+        expect(output.rank() == 2 && output.shape()[0] == 1 && output.shape()[1] == 2,
+               "gqa checkpoint's output shape is [1, vocab_size]");
     }
 
     // --- unsupported quantization type ---

@@ -2,18 +2,21 @@
 #include "gguf_test_helpers.h"
 #include "loader/gpt2_byte_encoding.h"
 #include "tensor/tensor.h"
+#include "tokenizer/bpe_tokenizer.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <variant>
 #include <vector>
 
 using mini_inference::loader::GgufCheckpoint;
 using mini_inference::loader::Gpt2ByteEncoding;
 using mini_inference::tensor::Tensor;
 using mini_inference::tests::GgufBufferBuilder;
+using mini_inference::tokenizer::BpeTokenizer;
 
 namespace
 {
@@ -82,7 +85,10 @@ int main()
         GgufCheckpoint checkpoint = mini_inference::loader::load_gguf_checkpoint(path);
 
         expect(checkpoint.model.vocab_size() == 3, "loaded model has the expected vocab_size");
-        expect(checkpoint.tokenizer.vocab_size() == 256, "loaded tokenizer has the 256-entry base vocab");
+        expect(std::holds_alternative<BpeTokenizer>(checkpoint.tokenizer),
+               "tokenizer.ggml.model == \"gpt2\" loads a BpeTokenizer");
+        const BpeTokenizer &tokenizer = std::get<BpeTokenizer>(checkpoint.tokenizer);
+        expect(tokenizer.vocab_size() == 256, "loaded tokenizer has the 256-entry base vocab");
         expect(checkpoint.bos_token_id.has_value() && *checkpoint.bos_token_id == 1,
                "bos_token_id is read from metadata");
         expect(checkpoint.eos_token_id.has_value() && *checkpoint.eos_token_id == 2,
@@ -92,7 +98,7 @@ int main()
         expect(output.rank() == 2 && output.shape()[0] == 1 && output.shape()[1] == 3,
                "model.forward produces logits of the expected shape");
 
-        expect(checkpoint.tokenizer.decode(checkpoint.tokenizer.encode("hi")) == "hi",
+        expect(tokenizer.decode(tokenizer.encode("hi")) == "hi",
                "tokenizer encode/decode round-trips plain text");
     }
 

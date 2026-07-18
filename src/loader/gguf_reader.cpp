@@ -335,6 +335,37 @@ namespace mini_inference::loader
         return result;
     }
 
+    std::vector<float> GgufReader::metadata_float_array(const std::string &key) const
+    {
+        const GgufValue &value = metadata(key);
+        if (!value.is_array)
+        {
+            throw std::invalid_argument("GGUF metadata key '" + key + "' is not an array");
+        }
+
+        std::vector<float> result;
+        result.reserve(value.array.size());
+        for (const GgufScalar &element : value.array)
+        {
+            const float scalar = std::visit(
+                [&key](auto &&arg) -> float
+                {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>)
+                    {
+                        return static_cast<float>(arg);
+                    }
+                    else
+                    {
+                        throw std::invalid_argument("GGUF metadata key '" + key + "' is not a float array");
+                    }
+                },
+                element);
+            result.push_back(scalar);
+        }
+        return result;
+    }
+
     bool GgufReader::has_tensor(const std::string &name) const
     {
         return tensors_.find(name) != tensors_.end();

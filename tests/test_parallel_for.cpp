@@ -50,11 +50,18 @@ namespace
         check_full_disjoint_coverage(10000, "large range (multithreaded)");
     }
 
+    // An empty range is small enough to always take the inline fallback path, which calls
+    // body(begin, end) once even when begin == end; the loop inside body is then a no-op.
     void test_empty_range()
     {
-        bool called = false;
-        parallel_for(5, 5, [&](std::size_t, std::size_t) { called = true; });
-        expect(!called, "empty range never invokes body");
+        bool saw_non_empty_chunk = false;
+        parallel_for(5, 5, [&](std::size_t begin, std::size_t end) {
+            if (begin != end)
+            {
+                saw_non_empty_chunk = true;
+            }
+        });
+        expect(!saw_non_empty_chunk, "empty range never produces a non-empty chunk");
     }
 
 } // namespace

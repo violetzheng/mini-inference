@@ -20,24 +20,33 @@ namespace mini_inference::layers
     class MultiHeadAttention
     {
     public:
+        // num_kv_heads == 0 means "same as num_heads" (plain multi-head attention);
+        // a smaller num_kv_heads enables grouped-query attention, where each KV head
+        // is shared by num_heads/num_kv_heads query heads.
         MultiHeadAttention(std::size_t hidden_dim, std::size_t num_heads, bool causal = true,
                             float rope_theta = 10000.0f, std::size_t max_position_embeddings = 2048,
                             std::vector<float> q_weights = {}, std::vector<float> q_bias = {},
                             std::vector<float> k_weights = {}, std::vector<float> k_bias = {},
                             std::vector<float> v_weights = {}, std::vector<float> v_bias = {},
-                            std::vector<float> o_weights = {}, std::vector<float> o_bias = {});
+                            std::vector<float> o_weights = {}, std::vector<float> o_bias = {},
+                            std::size_t num_kv_heads = 0);
 
         // Cache-friendly / quantization-friendly overload: caller supplies already-built
         // projections (each independently Linear or QuantizedLinear), e.g. from a GGUF
         // loader that decides per-tensor whether a projection's weights are quantized.
+        // k_proj/v_proj's out_features must equal num_kv_heads * head_dim (num_kv_heads
+        // == 0 meaning "same as num_heads", as above).
         MultiHeadAttention(std::size_t hidden_dim, std::size_t num_heads, bool causal,
                             float rope_theta, std::size_t max_position_embeddings,
                             LinearLayer q_proj, LinearLayer k_proj,
-                            LinearLayer v_proj, LinearLayer o_proj);
+                            LinearLayer v_proj, LinearLayer o_proj,
+                            std::size_t num_kv_heads = 0);
 
         std::size_t hidden_dim() const;
         std::size_t num_heads() const;
         std::size_t head_dim() const;
+        std::size_t num_kv_heads() const;
+        std::size_t kv_dim() const;
         bool causal() const;
 
         // Runs self-attention over `input` (shape [seq_len, hidden_dim]). `position_offset`
@@ -58,6 +67,8 @@ namespace mini_inference::layers
         std::size_t hidden_dim_{0};
         std::size_t num_heads_{0};
         std::size_t head_dim_{0};
+        std::size_t num_kv_heads_{0};
+        std::size_t kv_dim_{0};
         bool causal_{true};
 
         LinearLayer q_proj_;

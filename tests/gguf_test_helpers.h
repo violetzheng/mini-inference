@@ -50,6 +50,19 @@ namespace mini_inference::tests
             ++metadata_count_;
         }
 
+        void add_float32_array_kv(const std::string &key, const std::vector<float> &values)
+        {
+            append_string(metadata_, key);
+            append_u32(metadata_, 9); // ARRAY
+            append_u32(metadata_, 6); // element type FLOAT32
+            append_u64(metadata_, values.size());
+            for (float value : values)
+            {
+                append_f32(metadata_, value);
+            }
+            ++metadata_count_;
+        }
+
         void add_tensor_f32(const std::string &name, const std::vector<std::size_t> &shape,
                              const std::vector<float> &values)
         {

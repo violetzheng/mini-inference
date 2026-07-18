@@ -3,16 +3,19 @@
 #include "loader/gguf_reader.h"
 #include "loader/gpt2_byte_encoding.h"
 #include "tokenizer/bpe_tokenizer.h"
+#include "tokenizer/sentencepiece_tokenizer.h"
 
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 using mini_inference::loader::GgufReader;
 using mini_inference::loader::Gpt2ByteEncoding;
 using mini_inference::tests::GgufBufferBuilder;
 using mini_inference::tokenizer::BpeTokenizer;
+using mini_inference::tokenizer::SentencePieceTokenizer;
 
 namespace
 {
@@ -50,7 +53,9 @@ int main()
         builder.add_string_array_kv("tokenizer.ggml.merges", {"a b", "Ġ a"});
 
         GgufReader reader(builder.build());
-        BpeTokenizer tokenizer = mini_inference::loader::build_tokenizer(reader);
+        mini_inference::loader::Tokenizer loaded = mini_inference::loader::build_tokenizer(reader);
+        expect(std::holds_alternative<BpeTokenizer>(loaded), "tokenizer.ggml.model == \"gpt2\" loads a BpeTokenizer");
+        BpeTokenizer tokenizer = std::get<BpeTokenizer>(loaded);
 
         expect(tokenizer.vocab_size() == 258, "vocab_size is 256 base bytes + 2 merges");
         expect(tokenizer.token_bytes(256) == "ab", "merged token 256 decodes to raw bytes 'ab'");
@@ -62,10 +67,31 @@ int main()
         expect(tokenizer.decode(tokenizer.encode(" a")) == " a", "decode(encode(' a')) round-trips");
     }
 
-    // --- wrong tokenizer model ---
+    // --- SentencePiece tokenizer (tokenizer.ggml.model == "llama"): tokens + scores ---
     {
+        // "hi" is reached in two merge steps: "h"+"i"->"hi", then "\xE2\x96\x81"+"hi"->"\xE2\x96\x81hi".
+        std::vector<std::string> tokens = {"\xE2\x96\x81", "h", "i", "hi", "\xE2\x96\x81hi"};
+        std::vector<float> scores = {0.0f, 0.0f, 0.0f, 1.0f, 2.0f};
+
         GgufBufferBuilder builder;
         builder.add_string_kv("tokenizer.ggml.model", "llama");
+        builder.add_string_array_kv("tokenizer.ggml.tokens", tokens);
+        builder.add_float32_array_kv("tokenizer.ggml.scores", scores);
+
+        GgufReader reader(builder.build());
+        mini_inference::loader::Tokenizer loaded = mini_inference::loader::build_tokenizer(reader);
+        expect(std::holds_alternative<SentencePieceTokenizer>(loaded),
+               "tokenizer.ggml.model == \"llama\" loads a SentencePieceTokenizer");
+        const SentencePieceTokenizer &tokenizer = std::get<SentencePieceTokenizer>(loaded);
+
+        expect(tokenizer.vocab_size() == 5, "sentencepiece vocab_size matches the tokens array");
+        expect(tokenizer.decode(tokenizer.encode("hi")) == "hi", "sentencepiece decode(encode('hi')) round-trips");
+    }
+
+    // --- unsupported tokenizer model ---
+    {
+        GgufBufferBuilder builder;
+        builder.add_string_kv("tokenizer.ggml.model", "bert");
         GgufReader reader(builder.build());
 
         bool threw = false;
@@ -77,7 +103,26 @@ int main()
         {
             threw = true;
         }
-        expect(threw, "tokenizer.ggml.model != 'gpt2' throws invalid_argument");
+        expect(threw, "unsupported tokenizer.ggml.model throws invalid_argument");
+    }
+
+    // --- SentencePiece missing tokenizer.ggml.scores ---
+    {
+        GgufBufferBuilder builder;
+        builder.add_string_kv("tokenizer.ggml.model", "llama");
+        builder.add_string_array_kv("tokenizer.ggml.tokens", {"a", "b"});
+        GgufReader reader(builder.build());
+
+        bool threw = false;
+        try
+        {
+            (void)mini_inference::loader::build_tokenizer(reader);
+        }
+        catch (const std::out_of_range &)
+        {
+            threw = true;
+        }
+        expect(threw, "missing tokenizer.ggml.scores throws out_of_range");
     }
 
     // --- missing tokenizer model key ---

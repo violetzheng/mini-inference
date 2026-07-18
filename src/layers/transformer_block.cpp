@@ -62,6 +62,11 @@ namespace mini_inference::layers
         return intermediate_dim_;
     }
 
+    std::size_t TransformerBlock::kv_dim() const
+    {
+        return attention_.kv_dim();
+    }
+
     mini_inference::tensor::Tensor TransformerBlock::forward(const mini_inference::tensor::Tensor &input,
                                                                std::size_t position_offset) const
     {

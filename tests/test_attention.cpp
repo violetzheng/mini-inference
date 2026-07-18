@@ -1,10 +1,12 @@
 #include "layers/attention.h"
+#include "layers/kv_cache.h"
 
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 
+using mini_inference::layers::KvCache;
 using mini_inference::layers::Linear;
 using mini_inference::layers::MultiHeadAttention;
 using mini_inference::tensor::Tensor;
@@ -40,6 +42,67 @@ namespace
             weights[i * n + i] = 1.0f;
         }
         return weights;
+    }
+
+    // GQA sanity check: hidden_dim=4, num_heads=2, num_kv_heads=1 (head_dim=2, kv_dim=2).
+    // K selects input dims [0,1], V selects input dims [2,3], Q/O are identity. With a
+    // single-row input, causal softmax over one position is always weight 1.0 regardless
+    // of the score, so both query heads (which share the single KV head under GQA) must
+    // each output exactly V's value verbatim - this confirms head 1 doesn't silently read
+    // from head 1 of a hidden_dim_-wide K/V (there is no such head under GQA).
+    void test_grouped_query_attention()
+    {
+        const std::size_t hidden_dim = 4;
+        const std::size_t num_heads = 2;
+        const std::size_t num_kv_heads = 1;
+
+        const std::vector<float> k_weights = {1, 0, 0, 0,
+                                               0, 1, 0, 0};
+        const std::vector<float> v_weights = {0, 0, 1, 0,
+                                               0, 0, 0, 1};
+
+        MultiHeadAttention attn(hidden_dim, num_heads, /*causal=*/true, 10000.0f, 8,
+                                 identity_weights(hidden_dim), {},
+                                 k_weights, {},
+                                 v_weights, {},
+                                 identity_weights(hidden_dim), {},
+                                 num_kv_heads);
+
+        expect(attn.num_heads() == 2, "gqa num_heads");
+        expect(attn.num_kv_heads() == 1, "gqa num_kv_heads");
+        expect(attn.head_dim() == 2, "gqa head_dim");
+        expect(attn.kv_dim() == 2, "gqa kv_dim");
+
+        Tensor input({1, 4}, {1.0f, 2.0f, 3.0f, 4.0f});
+        Tensor output = attn.forward(input);
+
+        expect_close(output.at({0, 0}), 3.0f, "gqa head 0 shares kv head 0 (dim 0)");
+        expect_close(output.at({0, 1}), 4.0f, "gqa head 0 shares kv head 0 (dim 1)");
+        expect_close(output.at({0, 2}), 3.0f, "gqa head 1 shares kv head 0 (dim 0)");
+        expect_close(output.at({0, 3}), 4.0f, "gqa head 1 shares kv head 0 (dim 1)");
+
+        // Same expectation through the KV-cache path.
+        KvCache cache(4, attn.kv_dim());
+        Tensor cached_output = attn.forward(input, cache);
+        expect_close(cached_output.at({0, 0}), 3.0f, "gqa cache path head 0 (dim 0)");
+        expect_close(cached_output.at({0, 1}), 4.0f, "gqa cache path head 0 (dim 1)");
+        expect_close(cached_output.at({0, 2}), 3.0f, "gqa cache path head 1 (dim 0)");
+        expect_close(cached_output.at({0, 3}), 4.0f, "gqa cache path head 1 (dim 1)");
+
+        bool threw_indivisible = false;
+        try
+        {
+            // hidden_dim=4, num_heads=4 divides evenly (head_dim=1), but num_heads=4 is
+            // not a multiple of num_kv_heads=3, so this must fail on the GQA check
+            // specifically, not on the unrelated hidden_dim/num_heads divisibility check.
+            MultiHeadAttention bad(4, 4, true, 10000.0f, 8, {}, {}, {}, {}, {}, {}, {}, {}, /*num_kv_heads=*/3);
+            (void)bad;
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw_indivisible = true;
+        }
+        expect(threw_indivisible, "num_heads not divisible by num_kv_heads throws");
     }
 
 } // namespace
@@ -157,6 +220,8 @@ int main()
         threw_zero_heads = true;
     }
     expect(threw_zero_heads, "zero num_heads throws");
+
+    test_grouped_query_attention();
 
     if (failures != 0)
     {

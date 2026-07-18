@@ -429,10 +429,13 @@ namespace mini_inference::loader
         case GgmlType::kQ4_K:
             format = mini_inference::tensor::QuantFormat::Q4_K;
             break;
+        case GgmlType::kQ6_K:
+            format = mini_inference::tensor::QuantFormat::Q6_K;
+            break;
         default:
             throw std::invalid_argument("GGUF tensor '" + name + "' uses unsupported ggml type " +
                                          std::to_string(info.ggml_type) +
-                                         " (only Q8_0=8, Q4_0=2 and Q4_K=12 are supported)");
+                                         " (only Q8_0=8, Q4_0=2, Q4_K=12 and Q6_K=14 are supported)");
         }
 
         if (info.shape.size() != 2)

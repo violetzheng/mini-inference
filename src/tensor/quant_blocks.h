@@ -14,6 +14,7 @@ namespace mini_inference::tensor
         Q8_0,
         Q4_0,
         Q4_K,
+        Q6_K,
     };
 
     // Number of float elements a single block of `format` decodes into.
@@ -38,9 +39,18 @@ namespace mini_inference::tensor
     //     8 sub-blocks of 32 elements, each with its own 6-bit scale/min unpacked from
     //     `scales` (see get_scale_min_k4 in quant_blocks.cpp). Both nibble groups of a
     //     64-element chunk are decoded from the *same* 32 bytes of qs.
+    //
+    //   Q6_K (256 elements, 210 bytes): uint8_t ql[128]; uint8_t qh[64]; int8_t scales[16];
+    //     fp16 d. Unlike every format above, the super-block scale `d` comes *last*, not
+    //     first. 2 halves of 128 elements each; within a half, element l (0..31) reads a
+    //     6-bit unsigned quant split across ql (low 4 bits) and qh (high 2 bits), one of
+    //     4 positions per l (yielding elements l, l+32, l+64, l+96), each position scaled
+    //     by its own signed 8-bit sub-scale (2 of the 16 scales per half, one per 16-wide
+    //     group): v = d * scale * (q - 32).
     void dequantize_block_q8_0(const std::byte *block, float *out);
     void dequantize_block_q4_0(const std::byte *block, float *out);
     void dequantize_block_q4_k(const std::byte *block, float *out);
+    void dequantize_block_q6_k(const std::byte *block, float *out);
 
     // Dispatches to the matching dequantize_block_* for `format`.
     void dequantize_block(QuantFormat format, const std::byte *block, float *out);

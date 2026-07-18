@@ -85,9 +85,35 @@ namespace mini_inference::loader
             case GgmlType::kQ8_0:
             case GgmlType::kQ4_0:
             case GgmlType::kQ4_K:
+            case GgmlType::kQ6_K:
                 return LinearLayer(QuantizedLinear(reader.tensor_as_quantized(weight_name), std::move(bias)));
             default:
                 throw std::invalid_argument("GGUF tensor '" + weight_name + "' uses unsupported ggml type " +
+                                             std::to_string(info.ggml_type));
+            }
+        }
+
+        // Reads a weight matrix that's always needed as a flat, fully-materialized
+        // float32 vector rather than lazily dequantized like QuantizedLinear's per-row
+        // scheme - appropriate for the embedding table, which needs a full row-major
+        // float array regardless and is only read once at load time, not per forward
+        // call. F32/F16 tensors convert directly; quantized tensors are eagerly
+        // dequantized in full via QuantizedTensor::dequantize().
+        std::vector<float> read_dense_weight_matrix(const GgufReader &reader, const std::string &name)
+        {
+            const GgufTensorInfo &info = reader.tensor_info(name);
+            switch (static_cast<GgmlType>(info.ggml_type))
+            {
+            case GgmlType::kF32:
+            case GgmlType::kF16:
+                return reader.tensor_as_f32(name);
+            case GgmlType::kQ8_0:
+            case GgmlType::kQ4_0:
+            case GgmlType::kQ4_K:
+            case GgmlType::kQ6_K:
+                return reader.tensor_as_quantized(name).dequantize().values();
+            default:
+                throw std::invalid_argument("GGUF tensor '" + name + "' uses unsupported ggml type " +
                                              std::to_string(info.ggml_type));
             }
         }
@@ -133,7 +159,7 @@ namespace mini_inference::loader
             }
         }
 
-        const std::vector<float> token_embedding = reader.tensor_as_f32("token_embd.weight");
+        const std::vector<float> token_embedding = read_dense_weight_matrix(reader, "token_embd.weight");
         Embedding embedding(vocab_size, hidden_dim, token_embedding);
 
         std::vector<TransformerBlock> blocks;

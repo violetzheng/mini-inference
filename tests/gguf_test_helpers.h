@@ -121,6 +121,14 @@ namespace mini_inference::tests
             pad_tensor_data();
         }
 
+        void add_tensor_q6_k_raw(const std::string &name, const std::vector<std::size_t> &shape,
+                                  const std::vector<std::uint8_t> &blocks)
+        {
+            add_tensor_info(name, shape, /*ggml_type=*/14);
+            tensor_data_.insert(tensor_data_.end(), blocks.begin(), blocks.end());
+            pad_tensor_data();
+        }
+
         std::vector<std::uint8_t> build(std::uint32_t alignment = 32) const
         {
             std::vector<std::uint8_t> buffer;

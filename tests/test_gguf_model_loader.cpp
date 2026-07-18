@@ -87,6 +87,32 @@ namespace
         return x / (1.0f + std::exp(-x));
     }
 
+    std::vector<float> identity_weights(std::size_t n)
+    {
+        std::vector<float> weights(n * n, 0.0f);
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            weights[i * n + i] = 1.0f;
+        }
+        return weights;
+    }
+
+    // Bytes for one Q6_K block (210 bytes, 256 elements) that dequantizes to a uniform
+    // value of exactly `scale` for every one of its 256 elements: ql=0x11 and qh=0xAA
+    // repeating make every 6-bit quant re-center to 1 (see dequantize_block_q6_k's bit
+    // layout), d=1.0, so v = d * scale * 1 = scale for every element.
+    std::vector<std::uint8_t> uniform_q6_k_block_bytes(std::uint8_t scale)
+    {
+        std::vector<std::uint8_t> block;
+        block.reserve(210);
+        block.insert(block.end(), 128, 0x11); // ql
+        block.insert(block.end(), 64, 0xAA);  // qh
+        block.insert(block.end(), 16, scale); // scales (all sub-block scales equal)
+        block.push_back(0x00);                // d = 1.0 (fp16), low byte
+        block.push_back(0x3C);                // d = 1.0 (fp16), high byte
+        return block;
+    }
+
     // test_model.cpp's hand-derived forward pass, up to the post-final-RmsNorm state.
     void compute_final_hidden_state(float &final0, float &final1)
     {
@@ -226,6 +252,74 @@ int main()
         expect(!threw, "gqa checkpoint's forward pass does not throw");
         expect(output.rank() == 2 && output.shape()[0] == 1 && output.shape()[1] == 2,
                "gqa checkpoint's output shape is [1, vocab_size]");
+    }
+
+    // --- token_embd.weight quantized as Q6_K (as real "Q4_K_M" GGUF files store it) ---
+    {
+        constexpr std::size_t kHiddenDim = 256; // must be a multiple of Q6_K's 256-element block size
+        // eps=0 makes every intermediate value an exact power-of-two-friendly float
+        // (sqrt(16)=4, sqrt(25)=5, ...), so the hand-derived check below needs no
+        // floating-point tolerance slack from chained sqrt/divide rounding.
+        constexpr float kEps = 0.0f;
+
+        GgufBufferBuilder builder;
+        builder.add_string_kv("general.architecture", "llama");
+        builder.add_uint32_kv("llama.embedding_length", kHiddenDim);
+        builder.add_uint32_kv("llama.block_count", 1);
+        builder.add_uint32_kv("llama.feed_forward_length", 1);
+        builder.add_uint32_kv("llama.attention.head_count", 1);
+        builder.add_uint32_kv("llama.attention.head_count_kv", 1);
+        builder.add_float32_kv("llama.attention.layer_norm_rms_epsilon", kEps);
+        builder.add_float32_kv("llama.rope.freq_base", 10000.0f);
+        builder.add_uint32_kv("llama.context_length", 8);
+
+        // Row 0 (token id 0) dequantizes to a uniform 4.0 across all 256 features;
+        // row 1 to a uniform 2.0.
+        std::vector<std::uint8_t> embd_blocks = uniform_q6_k_block_bytes(4);
+        const std::vector<std::uint8_t> row1 = uniform_q6_k_block_bytes(2);
+        embd_blocks.insert(embd_blocks.end(), row1.begin(), row1.end());
+        builder.add_tensor_q6_k_raw("token_embd.weight", {kHiddenDim, 2}, embd_blocks);
+
+        builder.add_tensor_f32("blk.0.attn_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        builder.add_tensor_f32("blk.0.attn_q.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+        builder.add_tensor_f32("blk.0.attn_k.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+        builder.add_tensor_f32("blk.0.attn_v.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+        builder.add_tensor_f32("blk.0.attn_output.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+
+        builder.add_tensor_f32("blk.0.ffn_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        // Zero gate weights make silu(gate)*up == 0 regardless of up/down, so the FFN
+        // contributes nothing to the residual - keeps the hand-derived check below simple.
+        builder.add_tensor_f32("blk.0.ffn_gate.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 0.0f));
+        builder.add_tensor_f32("blk.0.ffn_up.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 0.0f));
+        builder.add_tensor_f32("blk.0.ffn_down.weight", {1, kHiddenDim}, std::vector<float>(kHiddenDim, 0.0f));
+
+        builder.add_tensor_f32("output_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        // output.weight omitted: tied embeddings reuse the (dequantized) token_embd.weight.
+
+        GgufReader reader(builder.build());
+        Model model = mini_inference::loader::build_model(reader);
+
+        expect(model.hidden_dim() == kHiddenDim, "q6_k embedding checkpoint has the expected hidden_dim");
+
+        const Tensor output = model.forward({0});
+        expect(output.rank() == 2 && output.shape()[0] == 1 && output.shape()[1] == 2,
+               "q6_k embedding checkpoint's output shape is [1, vocab_size]");
+
+        // Hand-derived: with a uniform hidden vector of value v, RmsNorm's mean-of-squares
+        // is exactly v^2 (the /dim cancels for a uniform vector), attention with identity
+        // Q/K/V/O and a single causal position is a no-op (softmax weight 1.0), and the
+        // zeroed FFN contributes nothing to the residual.
+        const float x = 4.0f; // token_embd row 0's dequantized value
+        const float rms1 = std::sqrt(x * x + kEps);
+        const float n1 = x / rms1;
+        const float r1 = x + n1;
+        const float rms3 = std::sqrt(r1 * r1 + kEps);
+        const float final_val = r1 / rms3;
+
+        expect_close(output.at({0, 0}), static_cast<float>(kHiddenDim) * final_val * 4.0f,
+                     "q6_k embedding logit 0 (tied to row 0, dequantized value 4.0)");
+        expect_close(output.at({0, 1}), static_cast<float>(kHiddenDim) * final_val * 2.0f,
+                     "q6_k embedding logit 1 (tied to row 1, dequantized value 2.0)");
     }
 
     // --- unsupported quantization type ---

@@ -10,6 +10,7 @@ using mini_inference::tensor::block_byte_size;
 using mini_inference::tensor::block_size;
 using mini_inference::tensor::dequantize_block_q4_0;
 using mini_inference::tensor::dequantize_block_q4_k;
+using mini_inference::tensor::dequantize_block_q6_k;
 using mini_inference::tensor::dequantize_block_q8_0;
 using mini_inference::tensor::QuantFormat;
 
@@ -55,6 +56,8 @@ namespace
         expect(block_byte_size(QuantFormat::Q4_0) == 18, "Q4_0 block_byte_size");
         expect(block_size(QuantFormat::Q4_K) == 256, "Q4_K block_size");
         expect(block_byte_size(QuantFormat::Q4_K) == 144, "Q4_K block_byte_size");
+        expect(block_size(QuantFormat::Q6_K) == 256, "Q6_K block_size");
+        expect(block_byte_size(QuantFormat::Q6_K) == 210, "Q6_K block_byte_size");
     }
 
     void test_q8_0()
@@ -141,6 +144,52 @@ namespace
         expect_close(out[224], 2.0f * 14 - 12, "q4_k element 224 (sub-block j=7)");
     }
 
+    void test_q6_k()
+    {
+        // d = 1.0 (fp16 0x3C00, bytes at the block's end: offset 208-209). Only
+        // scales[0,2,4,6] (half 0, is=0 group) and scales[8] (half 1, is=0 group) are
+        // non-zero; every scale in the is=1 group (scales[1,3,5,7,9,...]) is left at its
+        // zero default, so output positions from that group are 0 regardless of quant
+        // bits - see the background-element checks below.
+        //
+        // Half 0, l=0: ql[0]=0xD8, ql[32]=0x23, qh[0]=0xEA reassemble to raw 6-bit
+        // quants 40, 35, 45, 50 for q1..q4 (see dequantize_block_q6_k's bit layout),
+        // i.e. q1=8, q2=3, q3=13, q4=18 after the -32 re-center.
+        std::vector<std::byte> block(210, std::byte{0});
+        block[0] = static_cast<std::byte>(0xD8);
+        block[32] = static_cast<std::byte>(0x23);
+        block[128] = static_cast<std::byte>(0xEA);
+        block[192 + 0] = static_cast<std::byte>(5);
+        block[192 + 2] = static_cast<std::byte>(6);
+        block[192 + 4] = static_cast<std::byte>(7);
+        block[192 + 6] = static_cast<std::byte>(8);
+        // Half 1, l=0: ql[64]=0x0A, qh[32] (global byte 160)=0x02 -> raw quant 42, q1=10.
+        block[64] = static_cast<std::byte>(0x0A);
+        block[160] = static_cast<std::byte>(0x02);
+        block[192 + 8] = static_cast<std::byte>(2);
+        block[208] = static_cast<std::byte>(0x00);
+        block[209] = static_cast<std::byte>(0x3C);
+
+        std::vector<float> out(256, 0.0f);
+        dequantize_block_q6_k(block.data(), out.data());
+
+        expect_close(out[0], 40.0f, "q6_k half0 element 0 (d=1, sc=5, q1=8)");
+        expect_close(out[32], 18.0f, "q6_k half0 element 32 (d=1, sc=6, q2=3)");
+        expect_close(out[64], 91.0f, "q6_k half0 element 64 (d=1, sc=7, q3=13)");
+        expect_close(out[96], 144.0f, "q6_k half0 element 96 (d=1, sc=8, q4=18)");
+        expect_close(out[128], 20.0f, "q6_k half1 element 128 (d=1, sc=2, q1=10)");
+
+        // Elements with l in [16,32) (is=1) use scales[1,3,5,7,9,...], which were all
+        // left at their zero default, so those positions are 0 regardless of quant bits
+        // - unlike e.g. out[1], which shares out[0]'s is=0/scales[0] group and so is NOT
+        // zero (it picks up q1's background quant bits scaled by the non-zero scales[0]).
+        expect_close(out[16], 0.0f, "q6_k background element 16 (is=1, zero scale)");
+        expect_close(out[48], 0.0f, "q6_k background element 48 (is=1, zero scale)");
+        expect_close(out[80], 0.0f, "q6_k background element 80 (is=1, zero scale)");
+        expect_close(out[144], 0.0f, "q6_k background element 144 (half1, is=1, zero scale)");
+        expect_close(out[255], 0.0f, "q6_k background element 255 (half1, is=1, zero scale)");
+    }
+
 } // namespace
 
 int main()
@@ -149,6 +198,7 @@ int main()
     test_q8_0();
     test_q4_0();
     test_q4_k();
+    test_q6_k();
 
     if (failures != 0)
     {

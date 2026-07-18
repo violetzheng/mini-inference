@@ -20,6 +20,9 @@ namespace mini_inference::tensor
         constexpr std::size_t kBlockSizeQ4_K = 256;
         constexpr std::size_t kBlockByteSizeQ4_K = 2 + 2 + 12 + 128; // fp16 d, fp16 dmin, scales[12], qs[128]
 
+        constexpr std::size_t kBlockSizeQ6_K = 256;
+        constexpr std::size_t kBlockByteSizeQ6_K = 128 + 64 + 16 + 2; // ql[128], qh[64], scales[16], fp16 d
+
         std::uint16_t read_u16(const std::byte *bytes)
         {
             std::uint16_t value;
@@ -55,6 +58,8 @@ namespace mini_inference::tensor
             return kBlockSizeQ4_0;
         case QuantFormat::Q4_K:
             return kBlockSizeQ4_K;
+        case QuantFormat::Q6_K:
+            return kBlockSizeQ6_K;
         }
         throw std::invalid_argument("unknown QuantFormat");
     }
@@ -69,6 +74,8 @@ namespace mini_inference::tensor
             return kBlockByteSizeQ4_0;
         case QuantFormat::Q4_K:
             return kBlockByteSizeQ4_K;
+        case QuantFormat::Q6_K:
+            return kBlockByteSizeQ6_K;
         }
         throw std::invalid_argument("unknown QuantFormat");
     }
@@ -132,6 +139,44 @@ namespace mini_inference::tensor
         }
     }
 
+    void dequantize_block_q6_k(const std::byte *block, float *out)
+    {
+        // Field order is reversed vs. every format above: ql/qh/scales come first, and
+        // the fp16 super-block scale `d` comes last (byte offset 128+64+16 = 208).
+        const auto *ql = reinterpret_cast<const std::uint8_t *>(block);
+        const auto *qh = reinterpret_cast<const std::uint8_t *>(block + 128);
+        const auto *scales = reinterpret_cast<const std::int8_t *>(block + 128 + 64);
+        const float d = f16_to_f32(read_u16(block + 128 + 64 + 16));
+
+        // 2 halves of 128 elements, each with its own 64 ql / 32 qh / 8 scales bytes.
+        for (std::size_t half = 0; half < 2; ++half)
+        {
+            const std::uint8_t *half_ql = ql + half * 64;
+            const std::uint8_t *half_qh = qh + half * 32;
+            const std::int8_t *half_scales = scales + half * 8;
+            float *out_half = out + half * 128;
+
+            for (std::size_t l = 0; l < 32; ++l)
+            {
+                // Each of l's 4 output positions (l, l+32, l+64, l+96) reassembles a
+                // 6-bit unsigned quant from 4 bits of ql + 2 bits of qh, then re-centers
+                // it (0..63 -> -32..31). Scales are grouped in 16-wide chunks (is = l/16).
+                const std::size_t is = l / 16;
+                const auto q1 = static_cast<std::int8_t>((half_ql[l] & 0x0F) | (((half_qh[l] >> 0) & 0x03) << 4)) - 32;
+                const auto q2 =
+                    static_cast<std::int8_t>((half_ql[l + 32] & 0x0F) | (((half_qh[l] >> 2) & 0x03) << 4)) - 32;
+                const auto q3 = static_cast<std::int8_t>((half_ql[l] >> 4) | (((half_qh[l] >> 4) & 0x03) << 4)) - 32;
+                const auto q4 =
+                    static_cast<std::int8_t>((half_ql[l + 32] >> 4) | (((half_qh[l] >> 6) & 0x03) << 4)) - 32;
+
+                out_half[l] = d * static_cast<float>(half_scales[is + 0]) * static_cast<float>(q1);
+                out_half[l + 32] = d * static_cast<float>(half_scales[is + 2]) * static_cast<float>(q2);
+                out_half[l + 64] = d * static_cast<float>(half_scales[is + 4]) * static_cast<float>(q3);
+                out_half[l + 96] = d * static_cast<float>(half_scales[is + 6]) * static_cast<float>(q4);
+            }
+        }
+    }
+
     void dequantize_block(QuantFormat format, const std::byte *block, float *out)
     {
         switch (format)
@@ -144,6 +189,9 @@ namespace mini_inference::tensor
             return;
         case QuantFormat::Q4_K:
             dequantize_block_q4_k(block, out);
+            return;
+        case QuantFormat::Q6_K:
+            dequantize_block_q6_k(block, out);
             return;
         }
         throw std::invalid_argument("unknown QuantFormat");

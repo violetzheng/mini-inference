@@ -21,7 +21,7 @@ way simpler and not trying to be fast - readability over performance.
   what it actually supports)
 - A tiny CLI (`mini_inference`) that loads a checkpoint and generates from a prompt
 
-## Building & testing
+## Configuring & building & testing
 
 ```sh
 cmake -B build
@@ -31,8 +31,7 @@ ctest --test-dir build
 
 Every module has its own test file under `tests/`.
 
-## What models actually work
-
+## Supported Models
 The GGUF loader is pretty picky. For a checkpoint to load it needs:
 
 - `general.architecture` to be `llama`, `qwen2`, or `gemma`. Other architectures (phi3, ...)
@@ -43,10 +42,10 @@ The GGUF loader is pretty picky. For a checkpoint to load it needs:
   embedding table itself being quantized, not just the layer weights. Still missing:
   Q4_1, Q5_0, Q5_1, Q8_1, Q8_K.
 
-I've tested with TinyLlama-1.1B-Chat-v1.0, both the Q6_K and Q4_K_S GGUF
+I've tested the engine with TinyLlama-1.1B-Chat-v1.0, both the Q6_K and Q4_K_S GGUF
 files. `tinyllama-1.1b-chat-v1.0.Q4_K_S.gguf` and `tinyllama-1.1b-chat-v1.0.Q6_K.gguf`.
 
-## Running it
+## How to run it
 
 ```sh
 ./build/mini_inference <model.gguf> [prompt] [max_new_tokens]
@@ -54,7 +53,7 @@ files. `tinyllama-1.1b-chat-v1.0.Q4_K_S.gguf` and `tinyllama-1.1b-chat-v1.0.Q6_K
 
 `prompt` defaults to `"How are you"`, `max_new_tokens` defaults to `20`.
 
-### Example
+### E.g.
 
 ```
 $ ./build/mini_inference gguf_files/tinyllama-1.1b-chat-v1.0.Q6_K.gguf "Once upon a time" 20
@@ -70,7 +69,7 @@ Generating...
 <s> How are you able to provide such a wide range of products and services to your customers?</s>
 ```
 
-## Layout
+## File Layout
 
 ```
 src/

@@ -12,7 +12,7 @@ way simpler and not trying to be fast - readability over performance.
 - RoPE, applied per-head with a configurable position offset
 - Softmax
 - Multi-head self-attention with RoPE-rotated Q/K
-- SwiGLU feed-forward block
+- Gated feed-forward block (SwiGLU or GeGLU gate)
 - Transformer block: `x = x + attention(rms_norm(x))`, then `x = x + swiglu(rms_norm(x))`
 - Embedding lookup table
 - Model: embedding -> N transformer blocks -> final RMSNorm -> LM head -> logits
@@ -35,16 +35,16 @@ Every module has its own test file under `tests/`.
 
 The GGUF loader is pretty picky. For a checkpoint to load it needs:
 
-- `general.architecture` to be `llama`. Other archs (gemma, qwen2, phi3, ...) just don't
-  work right now, doesn't matter what else about the file is fine.
-- Multi-head or grouped-query attention, either is fine.
+- `general.architecture` to be `llama`, `qwen2`, or `gemma`. Other architectures (phi3, ...)
+  don't work right now. Gemma support is scoped to variants where `head_dim == embedding_length / head_count` (e.g. gemma-2b) - larger ones like gemma-7b use a head_dim the loader can't derive yet and are rejected.
+- Multi-head or grouped-query attention supported.
 - A gpt2-style byte-BPE tokenizer or llama's SentencePiece one.
 - Tensors in F32, F16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K, Q2_K or Q3_K. This includes the
   embedding table itself being quantized, not just the layer weights. Still missing:
   Q4_1, Q5_0, Q5_1, Q8_1, Q8_K.
 
-I've been testing against TinyLlama-1.1B-Chat-v1.0, both the Q6_K and Q4_K_S GGUF
-files - Q4_K_S is a good one to try since it stores `attn_v.weight` as Q5_K.
+I've tested with TinyLlama-1.1B-Chat-v1.0, both the Q6_K and Q4_K_S GGUF
+files. `tinyllama-1.1b-chat-v1.0.Q4_K_S.gguf` and `tinyllama-1.1b-chat-v1.0.Q6_K.gguf`.
 
 ## Running it
 

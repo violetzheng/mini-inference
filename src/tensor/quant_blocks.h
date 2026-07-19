@@ -15,6 +15,9 @@ namespace mini_inference::tensor
         Q4_0,
         Q4_K,
         Q6_K,
+        Q5_K,
+        Q2_K,
+        Q3_K,
     };
 
     // Number of float elements a single block of `format` decodes into.
@@ -47,10 +50,34 @@ namespace mini_inference::tensor
     //     4 positions per l (yielding elements l, l+32, l+64, l+96), each position scaled
     //     by its own signed 8-bit sub-scale (2 of the 16 scales per half, one per 16-wide
     //     group): v = d * scale * (q - 32).
+    //
+    //   Q5_K (256 elements, 176 bytes): fp16 d; fp16 dmin; uint8_t scales[12]; uint8_t qh[32];
+    //     uint8_t qs[128]. Same 8-sub-blocks-of-32/get_scale_min_k4 structure as Q4_K, but
+    //     each quant gets a 5th bit from qh (one bit per element, indexed 0..255 across the
+    //     whole block, reused for both the low- and high-nibble half of each 64-element
+    //     qs chunk the way Q4_K's qs is): q = nibble | (qh_bit << 4), range 0..31.
+    //     v = d*scale*q - dmin*min (same affine form as Q4_K).
+    //
+    //   Q2_K (256 elements, 84 bytes): uint8_t scales[16]; uint8_t qs[64]; fp16 d; fp16 dmin.
+    //     16 sub-blocks of 16 elements; sub-block j's scale/min come directly from one byte
+    //     (scale = scales[j] & 0xF, min = scales[j] >> 4 - no cross-byte unpacking, unlike
+    //     Q4_K/Q5_K). Quants are 2 bits, 4 packed per qs byte: sub-block j (0..3 within a
+    //     64-element chunk) reads (qs[byte] >> (2*j)) & 3. v = d*scale*q - dmin*min.
+    //
+    //   Q3_K (256 elements, 110 bytes): uint8_t hmask[32]; uint8_t qs[64]; uint8_t scales[12];
+    //     fp16 d. 16 sub-blocks of 16 elements, each with a *signed* 6-bit scale (-32..31,
+    //     `sc - 32`) unpacked from the 12-byte scales array via a 4x uint32_t bit-shuffle
+    //     (see quant_blocks.cpp). Quant is 2 bits from qs (same shift-based reader as Q2_K)
+    //     combined with a sign adjustment from hmask (a rotating single-bit mask over the
+    //     16 sub-blocks): q = (2-bit value) - (hmask bit set ? 0 : 4). v = d * scale * q
+    //     (no separate min term, unlike Q2_K/Q4_K/Q5_K).
     void dequantize_block_q8_0(const std::byte *block, float *out);
     void dequantize_block_q4_0(const std::byte *block, float *out);
     void dequantize_block_q4_k(const std::byte *block, float *out);
     void dequantize_block_q6_k(const std::byte *block, float *out);
+    void dequantize_block_q5_k(const std::byte *block, float *out);
+    void dequantize_block_q2_k(const std::byte *block, float *out);
+    void dequantize_block_q3_k(const std::byte *block, float *out);
 
     // Dispatches to the matching dequantize_block_* for `format`.
     void dequantize_block(QuantFormat format, const std::byte *block, float *out);

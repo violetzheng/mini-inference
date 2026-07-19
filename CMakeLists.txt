@@ -45,6 +45,12 @@ target_include_directories(mini_inference_core
 target_compile_options(mini_inference_core PRIVATE -O3 -march=native)
 target_link_libraries(mini_inference_core PUBLIC Threads::Threads)
 
+add_executable(mini_inference
+    src/main.cpp
+)
+
+target_link_libraries(mini_inference PRIVATE mini_inference_core)
+
 enable_testing()
 
 add_executable(test_matrix

@@ -86,6 +86,9 @@ namespace mini_inference::loader
             case GgmlType::kQ4_0:
             case GgmlType::kQ4_K:
             case GgmlType::kQ6_K:
+            case GgmlType::kQ5_K:
+            case GgmlType::kQ2_K:
+            case GgmlType::kQ3_K:
                 return LinearLayer(QuantizedLinear(reader.tensor_as_quantized(weight_name), std::move(bias)));
             default:
                 throw std::invalid_argument("GGUF tensor '" + weight_name + "' uses unsupported ggml type " +
@@ -111,6 +114,9 @@ namespace mini_inference::loader
             case GgmlType::kQ4_0:
             case GgmlType::kQ4_K:
             case GgmlType::kQ6_K:
+            case GgmlType::kQ5_K:
+            case GgmlType::kQ2_K:
+            case GgmlType::kQ3_K:
                 return reader.tensor_as_quantized(name).dequantize().values();
             default:
                 throw std::invalid_argument("GGUF tensor '" + name + "' uses unsupported ggml type " +

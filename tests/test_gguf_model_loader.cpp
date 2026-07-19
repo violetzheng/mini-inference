@@ -113,6 +113,26 @@ namespace
         return block;
     }
 
+    // Bytes for one Q5_K block (176 bytes, 256 elements) that dequantizes to a uniform
+    // value of exactly `scale` (must be < 16) for every element: qh all-zero (the 5th
+    // quant bit is always 0), qs bytes all 0x11 (both nibbles = 1, so q = 1 everywhere),
+    // every scale byte set to `scale` (get_scale_min_k4 reconstructs the same value for
+    // all 8 sub-blocks when every input byte is identical and < 16), dmin = 0 so the
+    // min term never contributes. v = d(1.0) * scale * 1 - 0 = scale.
+    std::vector<std::uint8_t> uniform_q5_k_block_bytes(std::uint8_t scale)
+    {
+        std::vector<std::uint8_t> block;
+        block.reserve(176);
+        block.push_back(0x00);
+        block.push_back(0x3C); // d = 1.0
+        block.push_back(0x00);
+        block.push_back(0x00);                  // dmin = 0.0
+        block.insert(block.end(), 12, scale);   // scales[12]
+        block.insert(block.end(), 32, 0x00);    // qh[32]
+        block.insert(block.end(), 128, 0x11);   // qs[128]
+        return block;
+    }
+
     // test_model.cpp's hand-derived forward pass, up to the post-final-RmsNorm state.
     void compute_final_hidden_state(float &final0, float &final1)
     {
@@ -320,6 +340,119 @@ int main()
                      "q6_k embedding logit 0 (tied to row 0, dequantized value 4.0)");
         expect_close(output.at({0, 1}), static_cast<float>(kHiddenDim) * final_val * 2.0f,
                      "q6_k embedding logit 1 (tied to row 1, dequantized value 2.0)");
+    }
+
+    // --- token_embd.weight quantized as Q5_K (the format actually blocking the real
+    // tinyllama-1.1b-chat-v1.0.Q4_K_S.gguf file used during manual testing) ---
+    {
+        constexpr std::size_t kHiddenDim = 256; // must be a multiple of Q5_K's 256-element block size
+        constexpr float kEps = 0.0f; // see the Q6_K test above for why eps=0 keeps this exact
+
+        GgufBufferBuilder builder;
+        builder.add_string_kv("general.architecture", "llama");
+        builder.add_uint32_kv("llama.embedding_length", kHiddenDim);
+        builder.add_uint32_kv("llama.block_count", 1);
+        builder.add_uint32_kv("llama.feed_forward_length", 1);
+        builder.add_uint32_kv("llama.attention.head_count", 1);
+        builder.add_uint32_kv("llama.attention.head_count_kv", 1);
+        builder.add_float32_kv("llama.attention.layer_norm_rms_epsilon", kEps);
+        builder.add_float32_kv("llama.rope.freq_base", 10000.0f);
+        builder.add_uint32_kv("llama.context_length", 8);
+
+        // Row 0 (token id 0) dequantizes to a uniform 4.0 across all 256 features;
+        // row 1 to a uniform 2.0.
+        std::vector<std::uint8_t> embd_blocks = uniform_q5_k_block_bytes(4);
+        const std::vector<std::uint8_t> row1 = uniform_q5_k_block_bytes(2);
+        embd_blocks.insert(embd_blocks.end(), row1.begin(), row1.end());
+        builder.add_tensor_q5_k_raw("token_embd.weight", {kHiddenDim, 2}, embd_blocks);
+
+        builder.add_tensor_f32("blk.0.attn_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        builder.add_tensor_f32("blk.0.attn_q.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+        builder.add_tensor_f32("blk.0.attn_k.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+        builder.add_tensor_f32("blk.0.attn_v.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+        builder.add_tensor_f32("blk.0.attn_output.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+
+        builder.add_tensor_f32("blk.0.ffn_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        builder.add_tensor_f32("blk.0.ffn_gate.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 0.0f));
+        builder.add_tensor_f32("blk.0.ffn_up.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 0.0f));
+        builder.add_tensor_f32("blk.0.ffn_down.weight", {1, kHiddenDim}, std::vector<float>(kHiddenDim, 0.0f));
+
+        builder.add_tensor_f32("output_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        // output.weight omitted: tied embeddings reuse the (dequantized) token_embd.weight.
+
+        GgufReader reader(builder.build());
+        Model model = mini_inference::loader::build_model(reader);
+
+        expect(model.hidden_dim() == kHiddenDim, "q5_k embedding checkpoint has the expected hidden_dim");
+
+        const Tensor output = model.forward({0});
+        expect(output.rank() == 2 && output.shape()[0] == 1 && output.shape()[1] == 2,
+               "q5_k embedding checkpoint's output shape is [1, vocab_size]");
+
+        const float x = 4.0f;
+        const float rms1 = std::sqrt(x * x + kEps);
+        const float n1 = x / rms1;
+        const float r1 = x + n1;
+        const float rms3 = std::sqrt(r1 * r1 + kEps);
+        const float final_val = r1 / rms3;
+
+        expect_close(output.at({0, 0}), static_cast<float>(kHiddenDim) * final_val * 4.0f,
+                     "q5_k embedding logit 0 (tied to row 0, dequantized value 4.0)");
+        expect_close(output.at({0, 1}), static_cast<float>(kHiddenDim) * final_val * 2.0f,
+                     "q5_k embedding logit 1 (tied to row 1, dequantized value 2.0)");
+    }
+
+    // --- Q2_K and Q3_K projection weights load without throwing (dispatch/shape
+    // correctness only - block content is all-zero, no hand-derived value check) ---
+    {
+        constexpr std::size_t kHiddenDim = 256; // must be a multiple of Q2_K/Q3_K's 256-element block size
+
+        GgufBufferBuilder builder;
+        builder.add_string_kv("general.architecture", "llama");
+        builder.add_uint32_kv("llama.embedding_length", kHiddenDim);
+        builder.add_uint32_kv("llama.block_count", 1);
+        builder.add_uint32_kv("llama.feed_forward_length", 1);
+        builder.add_uint32_kv("llama.attention.head_count", 1);
+        builder.add_uint32_kv("llama.attention.head_count_kv", 1);
+        builder.add_float32_kv("llama.attention.layer_norm_rms_epsilon", 1e-5f);
+        builder.add_float32_kv("llama.rope.freq_base", 10000.0f);
+        builder.add_uint32_kv("llama.context_length", 8);
+
+        builder.add_tensor_f32("token_embd.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 1.0f));
+        builder.add_tensor_f32("blk.0.attn_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        builder.add_tensor_f32("blk.0.attn_q.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+        // attn_k as Q2_K, attn_v as Q3_K: hidden_dim=256 means exactly one block per row
+        // (blocks_per_row = in_features/256 = 1), so each row is one zero-filled block.
+        builder.add_tensor_q2_k_raw("blk.0.attn_k.weight", {kHiddenDim, kHiddenDim},
+                                     std::vector<std::uint8_t>(kHiddenDim * 84, 0));
+        builder.add_tensor_q3_k_raw("blk.0.attn_v.weight", {kHiddenDim, kHiddenDim},
+                                     std::vector<std::uint8_t>(kHiddenDim * 110, 0));
+        builder.add_tensor_f32("blk.0.attn_output.weight", {kHiddenDim, kHiddenDim}, identity_weights(kHiddenDim));
+
+        builder.add_tensor_f32("blk.0.ffn_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        builder.add_tensor_f32("blk.0.ffn_gate.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 0.0f));
+        builder.add_tensor_f32("blk.0.ffn_up.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 0.0f));
+        builder.add_tensor_f32("blk.0.ffn_down.weight", {1, kHiddenDim}, std::vector<float>(kHiddenDim, 0.0f));
+
+        builder.add_tensor_f32("output_norm.weight", {kHiddenDim}, std::vector<float>(kHiddenDim, 1.0f));
+        builder.add_tensor_f32("output.weight", {kHiddenDim, 1}, std::vector<float>(kHiddenDim, 1.0f));
+
+        GgufReader reader(builder.build());
+        Model model = mini_inference::loader::build_model(reader);
+
+        bool threw = false;
+        Tensor output;
+        try
+        {
+            output = model.forward({0});
+        }
+        catch (const std::exception &)
+        {
+            threw = true;
+        }
+        expect(!threw, "q2_k/q3_k projection checkpoint's forward pass does not throw");
+        expect(output.rank() == 2 && output.shape()[0] == 1 && output.shape()[1] == 1,
+               "q2_k/q3_k projection checkpoint's output shape is [1, vocab_size]");
     }
 
     // --- unsupported quantization type ---

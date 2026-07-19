@@ -8,8 +8,11 @@
 
 using mini_inference::tensor::block_byte_size;
 using mini_inference::tensor::block_size;
+using mini_inference::tensor::dequantize_block_q2_k;
+using mini_inference::tensor::dequantize_block_q3_k;
 using mini_inference::tensor::dequantize_block_q4_0;
 using mini_inference::tensor::dequantize_block_q4_k;
+using mini_inference::tensor::dequantize_block_q5_k;
 using mini_inference::tensor::dequantize_block_q6_k;
 using mini_inference::tensor::dequantize_block_q8_0;
 using mini_inference::tensor::QuantFormat;
@@ -58,6 +61,12 @@ namespace
         expect(block_byte_size(QuantFormat::Q4_K) == 144, "Q4_K block_byte_size");
         expect(block_size(QuantFormat::Q6_K) == 256, "Q6_K block_size");
         expect(block_byte_size(QuantFormat::Q6_K) == 210, "Q6_K block_byte_size");
+        expect(block_size(QuantFormat::Q5_K) == 256, "Q5_K block_size");
+        expect(block_byte_size(QuantFormat::Q5_K) == 176, "Q5_K block_byte_size");
+        expect(block_size(QuantFormat::Q2_K) == 256, "Q2_K block_size");
+        expect(block_byte_size(QuantFormat::Q2_K) == 84, "Q2_K block_byte_size");
+        expect(block_size(QuantFormat::Q3_K) == 256, "Q3_K block_size");
+        expect(block_byte_size(QuantFormat::Q3_K) == 110, "Q3_K block_byte_size");
     }
 
     void test_q8_0()
@@ -190,6 +199,103 @@ namespace
         expect_close(out[255], 0.0f, "q6_k background element 255 (half1, is=1, zero scale)");
     }
 
+    void test_q5_k()
+    {
+        // d = dmin = 1.0. Sub-block scale/min packed exactly like Q4_K (get_scale_min_k4):
+        // scales[0]=5 (chunk0's sc0), scales[4]=2 (chunk0's m0); scales[3]=6, scales[7]=1
+        // (chunk1's sc1/m1, via is = chunk*2+1 = 3). Chunk0/1's OTHER sub-block (sc1/m0
+        // resp.) are left at zero, making that half of each chunk's output exactly 0.
+        std::vector<std::byte> block(176, std::byte{0});
+        block[0] = static_cast<std::byte>(0x00);
+        block[1] = static_cast<std::byte>(0x3C); // d = 1.0
+        block[2] = static_cast<std::byte>(0x00);
+        block[3] = static_cast<std::byte>(0x3C); // dmin = 1.0
+        block[4 + 0] = static_cast<std::byte>(5); // scales[0] (chunk0 lo sc)
+        block[4 + 3] = static_cast<std::byte>(6);  // scales[3] (chunk1 hi sc)
+        block[4 + 4] = static_cast<std::byte>(2);  // scales[4] (chunk0 lo min)
+        block[4 + 7] = static_cast<std::byte>(1);  // scales[7] (chunk1 hi min)
+        block[16 + 0] = static_cast<std::byte>(0x01);          // qh[0]: bit0 set
+        block[4 + 12 + 32 + 0] = static_cast<std::byte>(0x08); // qs[0]: low nibble 8
+        block[4 + 12 + 32 + 32] = static_cast<std::byte>(0x05); // qs[32]: low nibble 5
+
+        std::vector<float> out(256, 0.0f);
+        dequantize_block_q5_k(block.data(), out.data());
+
+        // Chunk0 lo, l=0: q = (qs[0]&0xF) | (qh[0]&u1(=1) ? 16:0) = 8|16 = 24.
+        // v = d*sc*q - dmin*m = 1*5*24 - 1*2 = 118.
+        expect_close(out[0], 118.0f, "q5_k chunk0 lo element 0 (5th bit set, q=24)");
+        // Same chunk0-lo scale/min group, but background quant bits (q=0): v = 5*0-2 = -2.
+        expect_close(out[1], -2.0f, "q5_k chunk0 lo background element 1");
+        // Chunk0 hi sub-block's scale/min (scales[1]/scales[5]) are both left at zero.
+        expect_close(out[32], 0.0f, "q5_k chunk0 hi element 32 (zero scale/min)");
+        // Chunk1 lo sub-block's scale/min (scales[2]/scales[6]) are both left at zero.
+        expect_close(out[64], 0.0f, "q5_k chunk1 lo element 64 (zero scale/min)");
+        // Chunk1 hi, l=0: u2 = 2<<2 = 8; qh[0]=0x01, bit3 unset -> +0. q = qs[32]>>4 = 0.
+        // v = d*6*0 - 1*1 = -1.
+        expect_close(out[96], -1.0f, "q5_k chunk1 hi element 96 (5th bit unset, q=0)");
+    }
+
+    void test_q2_k()
+    {
+        // d = dmin = 1.0. scales[0] = 0x35 (min=3, scale=5) for chunk0/j=0's lo
+        // sub-block; scales[1] = 0x12 (min=1, scale=2) for its hi sub-block; scales[8]
+        // = 0x24 (min=2, scale=4) for chunk1/j=0's lo sub-block. scales[2]/[3] (chunk0
+        // j=1's lo/hi) are left at zero, so that sub-block's output is exactly 0.
+        std::vector<std::byte> block(84, std::byte{0});
+        block[0] = static_cast<std::byte>(0x35); // scales[0]
+        block[1] = static_cast<std::byte>(0x12); // scales[1]
+        block[8] = static_cast<std::byte>(0x24); // scales[8]
+        block[16 + 0] = static_cast<std::byte>(0x03);  // qs[0]: low 2 bits = 3
+        block[16 + 16] = static_cast<std::byte>(0x03); // qs[16]: low 2 bits = 3
+        block[16 + 32] = static_cast<std::byte>(0x01); // qs[32]: low 2 bits = 1
+        block[80] = static_cast<std::byte>(0x00);
+        block[81] = static_cast<std::byte>(0x3C); // d = 1.0
+        block[82] = static_cast<std::byte>(0x00);
+        block[83] = static_cast<std::byte>(0x3C); // dmin = 1.0
+
+        std::vector<float> out(256, 0.0f);
+        dequantize_block_q2_k(block.data(), out.data());
+
+        // Chunk0/j=0 lo, l=0: v = d*5*3 - dmin*3 = 15-3 = 12.
+        expect_close(out[0], 12.0f, "q2_k chunk0 j0 lo element 0");
+        // Chunk0/j=0 hi, l=0: v = d*2*3 - dmin*1 = 6-1 = 5.
+        expect_close(out[16], 5.0f, "q2_k chunk0 j0 hi element 16");
+        // Chunk0/j=1 lo/hi sub-blocks (scales[2]/[3]) are both zero.
+        expect_close(out[32], 0.0f, "q2_k chunk0 j1 lo element 32 (zero scale/min)");
+        expect_close(out[48], 0.0f, "q2_k chunk0 j1 hi element 48 (zero scale/min)");
+        // Chunk1/j=0 lo, l=0: v = d*4*1 - dmin*2 = 4-2 = 2.
+        expect_close(out[128], 2.0f, "q2_k chunk1 j0 lo element 128");
+    }
+
+    void test_q3_k()
+    {
+        // d = 1.0. scales_raw[0] = 0x0D, scales_raw[8] = 0x02 unpack (via
+        // unpack_q3_k_scales) to scales_unpacked[0] = 45 (sc = 45-32 = 13, used for
+        // chunk0/j=0's lo sub-block) and scales_unpacked[8] = 0 (sc = 0-32 = -32, used
+        // for chunk1/j=0's lo sub-block, since `is` keeps counting across chunks).
+        std::vector<std::byte> block(110, std::byte{0});
+        block[32 + 0] = static_cast<std::byte>(0x03); // qs[0]: low 2 bits = 3
+        block[96 + 0] = static_cast<std::byte>(0x0D); // scales_raw[0]
+        block[96 + 8] = static_cast<std::byte>(0x02); // scales_raw[8]
+        block[108] = static_cast<std::byte>(0x00);
+        block[109] = static_cast<std::byte>(0x3C); // d = 1.0
+        // hmask left all-zero: every hmask bit tested below is "unset" -> subtract 4.
+
+        std::vector<float> out(256, 0.0f);
+        dequantize_block_q3_k(block.data(), out.data());
+
+        // Chunk0/j=0 lo, l=0: sc=13, m=1 (initial rotating mask), hmask[0] bit0 unset.
+        // bits = qs[0]&3 = 3; centered = 3 - 4 = -1. v = d*13*(-1) = -13.
+        expect_close(out[0], -13.0f, "q3_k chunk0 lo element 0 (hot quant, hmask unset)");
+        // Same sub-block, background quant bits (q=0): centered = 0-4 = -4. v=13*-4=-52.
+        expect_close(out[1], -52.0f, "q3_k chunk0 lo background element 1");
+        // Chunk1/j=0 lo, l=0: `is` has advanced to 8 (sc=-32), `m` has rotated to 16
+        // (after 4 j-iterations of chunk0, each left-shifting m by 1: 1->2->4->8->16).
+        // qs[32] and hmask[0]'s bit4 are both 0 -> bits=0, centered=0-4=-4.
+        // v = d*(-32)*(-4) = 128.
+        expect_close(out[128], 128.0f, "q3_k chunk1 lo element 128 (m persists across chunks)");
+    }
+
 } // namespace
 
 int main()
@@ -199,6 +305,9 @@ int main()
     test_q4_0();
     test_q4_k();
     test_q6_k();
+    test_q5_k();
+    test_q2_k();
+    test_q3_k();
 
     if (failures != 0)
     {

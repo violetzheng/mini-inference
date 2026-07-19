@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 
+using mini_inference::layers::GateActivation;
 using mini_inference::layers::SwiGLU;
 using mini_inference::tensor::Tensor;
 
@@ -34,6 +35,13 @@ namespace
     float silu(float x)
     {
         return x / (1.0f + std::exp(-x));
+    }
+
+    // Matches fused_gelu_mul's tanh approximation (Gemma's "gelu_pytorch_tanh").
+    float gelu_tanh(float x)
+    {
+        constexpr float kSqrt2OverPi = 0.7978845608028654f;
+        return 0.5f * x * (1.0f + std::tanh(kSqrt2OverPi * (x + 0.044715f * x * x * x)));
     }
 
 } // namespace
@@ -179,6 +187,25 @@ int main()
         threw_down_weights = true;
     }
     expect(threw_down_weights, "down_weights size mismatch throws");
+
+    // GateActivation::kGelu (GeGLU): same wiring as above, gated with gelu_tanh instead.
+    {
+        SwiGLU gelu_ffn(hidden_dim, intermediate_dim,
+                         {1.0f, 0.0f}, {},
+                         {0.0f, 1.0f}, {},
+                         {2.0f, -1.0f}, {},
+                         GateActivation::kGelu);
+
+        Tensor gelu_output = gelu_ffn.forward(input);
+
+        const float gelu_fused_row0 = gelu_tanh(1.0f) * 2.0f;
+        expect_close(gelu_output.at({0, 0}), gelu_fused_row0 * 2.0f, "gelu row 0 output dim 0");
+        expect_close(gelu_output.at({0, 1}), gelu_fused_row0 * -1.0f, "gelu row 0 output dim 1");
+
+        const float gelu_fused_row1 = gelu_tanh(-3.0f) * 0.5f;
+        expect_close(gelu_output.at({1, 0}), gelu_fused_row1 * 2.0f, "gelu row 1 output dim 0 (negative gate)");
+        expect_close(gelu_output.at({1, 1}), gelu_fused_row1 * -1.0f, "gelu row 1 output dim 1 (negative gate)");
+    }
 
     if (failures != 0)
     {

@@ -8,6 +8,7 @@
 #include "layers/swiglu.h"
 #include "layers/transformer_block.h"
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -22,6 +23,7 @@ namespace mini_inference::loader
     {
 
         using mini_inference::layers::Embedding;
+        using mini_inference::layers::GateActivation;
         using mini_inference::layers::Linear;
         using mini_inference::layers::LinearLayer;
         using mini_inference::layers::MultiHeadAttention;
@@ -124,28 +126,78 @@ namespace mini_inference::loader
             }
         }
 
+        // qwen2 mirrors llama's tensors and metadata under a "qwen2." prefix. gemma also
+        // scales the input embedding, offsets RmsNorm by +1, and gates its FFN with GELU.
+        bool is_supported_architecture(const std::string &architecture)
+        {
+            return architecture == "llama" || architecture == "qwen2" || architecture == "gemma";
+        }
+
+        // Larger Gemma variants (e.g. gemma-7b) have a head_dim that isn't
+        // embedding_length/head_count; reject those instead of silently using a wrong shape.
+        void check_gemma_head_dim(const GgufReader &reader, const std::string &metadata_prefix,
+                                   std::size_t derived_head_dim)
+        {
+            const std::string key = metadata_prefix + "attention.key_length";
+            if (!reader.has_metadata(key))
+            {
+                return;
+            }
+            const std::size_t declared_head_dim = reader.metadata_uint32(key, 0);
+            if (declared_head_dim != derived_head_dim)
+            {
+                throw std::invalid_argument(
+                    "gemma head_dim derived from embedding_length/head_count (" + std::to_string(derived_head_dim) +
+                    ") does not match " + key + " (" + std::to_string(declared_head_dim) +
+                    "); only Gemma variants where head_dim == embedding_length/head_count are supported");
+            }
+        }
+
+        // Gemma norms as x * (1 + weight); baking the +1 in keeps RmsNorm arch-agnostic.
+        std::vector<float> load_norm_weight(const GgufReader &reader, const std::string &name, std::size_t dim,
+                                             bool add_one)
+        {
+            std::vector<float> gamma = required_tensor(reader, name, {dim});
+            if (add_one)
+            {
+                for (float &value : gamma)
+                {
+                    value += 1.0f;
+                }
+            }
+            return gamma;
+        }
+
     } // namespace
 
     Model build_model(const GgufReader &reader)
     {
         const std::string architecture = reader.metadata_string("general.architecture");
-        if (architecture != "llama")
+        if (!is_supported_architecture(architecture))
         {
             throw std::invalid_argument("unsupported GGUF architecture '" + architecture +
-                                         "' (only 'llama' is supported)");
+                                         "' (supported: llama, qwen2, gemma)");
         }
+        const bool is_gemma = architecture == "gemma";
+        const std::string metadata_prefix = architecture + ".";
 
-        const std::size_t hidden_dim = reader.metadata_uint32("llama.embedding_length", 0);
-        const std::size_t num_layers = reader.metadata_uint32("llama.block_count", 0);
-        const std::size_t intermediate_dim = reader.metadata_uint32("llama.feed_forward_length", 0);
-        const std::uint32_t num_heads = reader.metadata_uint32("llama.attention.head_count", 0);
-        const std::uint32_t num_kv_heads = reader.metadata_uint32("llama.attention.head_count_kv", num_heads);
-        const float rms_eps = reader.metadata_float("llama.attention.layer_norm_rms_epsilon", 1e-5f);
-        const float rope_theta = reader.metadata_float("llama.rope.freq_base", 10000.0f);
-        const std::size_t max_position_embeddings = reader.metadata_uint32("llama.context_length", 2048);
+        const std::size_t hidden_dim = reader.metadata_uint32(metadata_prefix + "embedding_length", 0);
+        const std::size_t num_layers = reader.metadata_uint32(metadata_prefix + "block_count", 0);
+        const std::size_t intermediate_dim = reader.metadata_uint32(metadata_prefix + "feed_forward_length", 0);
+        const std::uint32_t num_heads = reader.metadata_uint32(metadata_prefix + "attention.head_count", 0);
+        const std::uint32_t num_kv_heads =
+            reader.metadata_uint32(metadata_prefix + "attention.head_count_kv", num_heads);
+        const float rms_eps = reader.metadata_float(metadata_prefix + "attention.layer_norm_rms_epsilon", 1e-5f);
+        const float rope_theta = reader.metadata_float(metadata_prefix + "rope.freq_base", 10000.0f);
+        const std::size_t max_position_embeddings = reader.metadata_uint32(metadata_prefix + "context_length", 2048);
 
         const std::size_t head_dim = num_heads == 0 ? 0 : hidden_dim / num_heads;
         const std::size_t kv_dim = static_cast<std::size_t>(num_kv_heads) * head_dim;
+
+        if (is_gemma)
+        {
+            check_gemma_head_dim(reader, metadata_prefix, head_dim);
+        }
 
         const GgufTensorInfo &token_embd_info = reader.tensor_info("token_embd.weight");
         if (token_embd_info.shape.size() != 2 || token_embd_info.shape[0] != hidden_dim)
@@ -154,19 +206,32 @@ namespace mini_inference::loader
         }
         const std::size_t vocab_size = token_embd_info.shape[1];
 
-        if (reader.has_metadata("llama.vocab_size"))
+        if (reader.has_metadata(metadata_prefix + "vocab_size"))
         {
-            const std::size_t declared_vocab_size = reader.metadata_uint32("llama.vocab_size", 0);
+            const std::size_t declared_vocab_size = reader.metadata_uint32(metadata_prefix + "vocab_size", 0);
             if (declared_vocab_size != vocab_size)
             {
-                throw std::invalid_argument("llama.vocab_size metadata (" + std::to_string(declared_vocab_size) +
+                throw std::invalid_argument(metadata_prefix + "vocab_size metadata (" +
+                                             std::to_string(declared_vocab_size) +
                                              ") does not match token_embd.weight's row count (" +
                                              std::to_string(vocab_size) + ")");
             }
         }
 
+        // Unscaled, for a tied lm_head; gemma scales only the input embedding lookup below.
         const std::vector<float> token_embedding = read_dense_weight_matrix(reader, "token_embd.weight");
-        Embedding embedding(vocab_size, hidden_dim, token_embedding);
+        std::vector<float> input_embedding = token_embedding;
+        if (is_gemma)
+        {
+            const float normalizer = std::sqrt(static_cast<float>(hidden_dim));
+            for (float &value : input_embedding)
+            {
+                value *= normalizer;
+            }
+        }
+        Embedding embedding(vocab_size, hidden_dim, std::move(input_embedding));
+
+        const GateActivation ffn_activation = is_gemma ? GateActivation::kGelu : GateActivation::kSilu;
 
         std::vector<TransformerBlock> blocks;
         blocks.reserve(num_layers);
@@ -174,7 +239,8 @@ namespace mini_inference::loader
         {
             const std::string prefix = block_prefix(layer);
 
-            RmsNorm attn_norm(hidden_dim, rms_eps, required_tensor(reader, prefix + "attn_norm.weight", {hidden_dim}));
+            RmsNorm attn_norm(hidden_dim, rms_eps,
+                               load_norm_weight(reader, prefix + "attn_norm.weight", hidden_dim, is_gemma));
 
             MultiHeadAttention attention(
                 hidden_dim, num_heads, /*causal=*/true, rope_theta, max_position_embeddings,
@@ -185,7 +251,8 @@ namespace mini_inference::loader
                                     hidden_dim),
                 num_kv_heads);
 
-            RmsNorm ffn_norm(hidden_dim, rms_eps, required_tensor(reader, prefix + "ffn_norm.weight", {hidden_dim}));
+            RmsNorm ffn_norm(hidden_dim, rms_eps,
+                              load_norm_weight(reader, prefix + "ffn_norm.weight", hidden_dim, is_gemma));
 
             SwiGLU ffn(
                 hidden_dim, intermediate_dim,
@@ -194,12 +261,13 @@ namespace mini_inference::loader
                 build_linear_layer(reader, prefix + "ffn_up.weight", prefix + "ffn_up.bias", hidden_dim,
                                     intermediate_dim),
                 build_linear_layer(reader, prefix + "ffn_down.weight", prefix + "ffn_down.bias", intermediate_dim,
-                                    hidden_dim));
+                                    hidden_dim),
+                ffn_activation);
 
             blocks.emplace_back(std::move(attn_norm), std::move(attention), std::move(ffn_norm), std::move(ffn));
         }
 
-        RmsNorm final_norm(hidden_dim, rms_eps, required_tensor(reader, "output_norm.weight", {hidden_dim}));
+        RmsNorm final_norm(hidden_dim, rms_eps, load_norm_weight(reader, "output_norm.weight", hidden_dim, is_gemma));
 
         // Tied embeddings: small checkpoints often omit output.weight entirely.
         LinearLayer lm_head = reader.has_tensor("output.weight")

@@ -161,6 +161,140 @@ namespace
         final1 = block_out1 / final_rms;
     }
 
+    // Same as add_llama_checkpoint, under the "qwen2." metadata namespace. Optionally
+    // adds an attn_v.bias tensor.
+    void add_qwen2_checkpoint(GgufBufferBuilder &builder, bool include_v_bias = false)
+    {
+        builder.add_string_kv("general.architecture", "qwen2");
+        builder.add_uint32_kv("qwen2.embedding_length", 2);
+        builder.add_uint32_kv("qwen2.block_count", 1);
+        builder.add_uint32_kv("qwen2.feed_forward_length", 1);
+        builder.add_uint32_kv("qwen2.attention.head_count", 1);
+        builder.add_uint32_kv("qwen2.attention.head_count_kv", 1);
+        builder.add_float32_kv("qwen2.attention.layer_norm_rms_epsilon", 1e-5f);
+        builder.add_float32_kv("qwen2.rope.freq_base", 10000.0f);
+        builder.add_uint32_kv("qwen2.context_length", 8);
+
+        builder.add_tensor_f32("token_embd.weight", {2, 3}, {1.0f, 2.0f, 0.0f, 0.0f, -1.0f, -1.0f});
+
+        builder.add_tensor_f32("blk.0.attn_norm.weight", {2}, {1.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_q.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_k.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_v.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+        if (include_v_bias)
+        {
+            builder.add_tensor_f32("blk.0.attn_v.bias", {2}, {0.5f, -0.5f});
+        }
+        builder.add_tensor_f32("blk.0.attn_output.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+
+        builder.add_tensor_f32("blk.0.ffn_norm.weight", {2}, {1.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.ffn_gate.weight", {2, 1}, {1.0f, 0.0f});
+        builder.add_tensor_f32("blk.0.ffn_up.weight", {2, 1}, {0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.ffn_down.weight", {1, 2}, {2.0f, -1.0f});
+
+        builder.add_tensor_f32("output_norm.weight", {2}, {1.0f, 1.0f});
+        builder.add_tensor_f32("output.weight", {2, 3}, {1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f});
+    }
+
+    // Like compute_final_hidden_state, but attn_v carries a bias: with identity V/O and
+    // one token, softmax is always 1.0, so attn_out == V + v_bias.
+    void compute_qwen2_bias_final_hidden_state(float &final0, float &final1)
+    {
+        const float x0 = 1.0f;
+        const float x1 = 2.0f;
+        const float eps = 1e-5f;
+
+        const float rms1 = std::sqrt((x0 * x0 + x1 * x1) / 2.0f + eps);
+        const float attn_out0 = (x0 / rms1) + 0.5f;
+        const float attn_out1 = (x1 / rms1) - 0.5f;
+
+        const float residual1_0 = x0 + attn_out0;
+        const float residual1_1 = x1 + attn_out1;
+
+        const float rms2 = std::sqrt((residual1_0 * residual1_0 + residual1_1 * residual1_1) / 2.0f + eps);
+        const float normed2_0 = residual1_0 / rms2;
+        const float normed2_1 = residual1_1 / rms2;
+
+        const float fused = silu(normed2_0) * normed2_1;
+
+        const float block_out0 = residual1_0 + fused * 2.0f;
+        const float block_out1 = residual1_1 + fused * -1.0f;
+
+        const float final_rms = std::sqrt((block_out0 * block_out0 + block_out1 * block_out1) / 2.0f + eps);
+        final0 = block_out0 / final_rms;
+        final1 = block_out1 / final_rms;
+    }
+
+    float gelu_tanh(float x)
+    {
+        constexpr float kSqrt2OverPi = 0.7978845608028654f;
+        return 0.5f * x * (1.0f + std::tanh(kSqrt2OverPi * (x + 0.044715f * x * x * x)));
+    }
+
+    // Same as add_llama_checkpoint, under the "gemma." metadata namespace. Norm weights
+    // are stored as 1.0, which the loader's +1 offset turns into gamma=2.0.
+    void add_gemma_checkpoint(GgufBufferBuilder &builder, bool include_output_weight = false)
+    {
+        builder.add_string_kv("general.architecture", "gemma");
+        builder.add_uint32_kv("gemma.embedding_length", 2);
+        builder.add_uint32_kv("gemma.block_count", 1);
+        builder.add_uint32_kv("gemma.feed_forward_length", 1);
+        builder.add_uint32_kv("gemma.attention.head_count", 1);
+        builder.add_uint32_kv("gemma.attention.head_count_kv", 1);
+        builder.add_float32_kv("gemma.attention.layer_norm_rms_epsilon", 1e-5f);
+        builder.add_float32_kv("gemma.rope.freq_base", 10000.0f);
+        builder.add_uint32_kv("gemma.context_length", 8);
+
+        builder.add_tensor_f32("token_embd.weight", {2, 3}, {1.0f, 2.0f, 0.0f, 0.0f, -1.0f, -1.0f});
+
+        builder.add_tensor_f32("blk.0.attn_norm.weight", {2}, {1.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_q.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_k.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_v.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.attn_output.weight", {2, 2}, {1.0f, 0.0f, 0.0f, 1.0f});
+
+        builder.add_tensor_f32("blk.0.ffn_norm.weight", {2}, {1.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.ffn_gate.weight", {2, 1}, {1.0f, 0.0f});
+        builder.add_tensor_f32("blk.0.ffn_up.weight", {2, 1}, {0.0f, 1.0f});
+        builder.add_tensor_f32("blk.0.ffn_down.weight", {1, 2}, {2.0f, -1.0f});
+
+        builder.add_tensor_f32("output_norm.weight", {2}, {1.0f, 1.0f});
+        if (include_output_weight)
+        {
+            builder.add_tensor_f32("output.weight", {2, 3}, {1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f});
+        }
+    }
+
+    // Closed-form derivation for add_gemma_checkpoint's forward pass.
+    void compute_gemma_final_hidden_state(float &final0, float &final1)
+    {
+        const float normalizer = std::sqrt(2.0f);
+        const float x0 = 1.0f * normalizer;
+        const float x1 = 2.0f * normalizer;
+        const float eps = 1e-5f;
+        const float gamma = 2.0f;
+
+        const float rms1 = std::sqrt((x0 * x0 + x1 * x1) / 2.0f + eps);
+        const float normed1_0 = (x0 / rms1) * gamma;
+        const float normed1_1 = (x1 / rms1) * gamma;
+
+        const float residual1_0 = x0 + normed1_0;
+        const float residual1_1 = x1 + normed1_1;
+
+        const float rms2 = std::sqrt((residual1_0 * residual1_0 + residual1_1 * residual1_1) / 2.0f + eps);
+        const float normed2_0 = (residual1_0 / rms2) * gamma;
+        const float normed2_1 = (residual1_1 / rms2) * gamma;
+
+        const float fused = gelu_tanh(normed2_0) * normed2_1;
+
+        const float block_out0 = residual1_0 + fused * 2.0f;
+        const float block_out1 = residual1_1 + fused * -1.0f;
+
+        const float final_rms = std::sqrt((block_out0 * block_out0 + block_out1 * block_out1) / 2.0f + eps);
+        final0 = (block_out0 / final_rms) * gamma;
+        final1 = (block_out1 / final_rms) * gamma;
+    }
+
 } // namespace
 
 int main()
@@ -490,6 +624,77 @@ int main()
             threw = true;
         }
         expect(threw, "missing required tensor propagates out_of_range naming it");
+    }
+
+    // --- qwen2 ---
+    {
+        GgufBufferBuilder builder;
+        add_qwen2_checkpoint(builder);
+        GgufReader reader(builder.build());
+        Model model = mini_inference::loader::build_model(reader);
+
+        expect(model.hidden_dim() == 2, "qwen2 checkpoint has the expected hidden_dim");
+
+        const Tensor output = model.forward({0});
+        expect_close(output.at({0, 0}), final0, "qwen2 logit 0 matches the llama golden-path derivation");
+        expect_close(output.at({0, 1}), final1, "qwen2 logit 1 matches the llama golden-path derivation");
+        expect_close(output.at({0, 2}), final0 + final1, "qwen2 logit 2 matches the llama golden-path derivation");
+    }
+
+    // --- qwen2 with an attn_v.bias tensor ---
+    {
+        float bias_final0 = 0.0f;
+        float bias_final1 = 0.0f;
+        compute_qwen2_bias_final_hidden_state(bias_final0, bias_final1);
+
+        GgufBufferBuilder builder;
+        add_qwen2_checkpoint(builder, /*include_v_bias=*/true);
+        GgufReader reader(builder.build());
+        Model model = mini_inference::loader::build_model(reader);
+
+        const Tensor output = model.forward({0});
+        expect_close(output.at({0, 0}), bias_final0, "qwen2 attn_v.bias logit 0 matches the closed-form derivation");
+        expect_close(output.at({0, 1}), bias_final1, "qwen2 attn_v.bias logit 1 matches the closed-form derivation");
+    }
+
+    // --- gemma, tied embeddings ---
+    {
+        float gemma_final0 = 0.0f;
+        float gemma_final1 = 0.0f;
+        compute_gemma_final_hidden_state(gemma_final0, gemma_final1);
+
+        GgufBufferBuilder builder;
+        add_gemma_checkpoint(builder);
+        GgufReader reader(builder.build());
+        Model model = mini_inference::loader::build_model(reader);
+
+        expect(model.hidden_dim() == 2, "gemma checkpoint has the expected hidden_dim");
+
+        const Tensor output = model.forward({0});
+        expect_close(output.at({0, 0}), gemma_final0 * 1.0f + gemma_final1 * 2.0f,
+                     "gemma tied lm_head logit 0 uses the unscaled embedding row");
+        expect_close(output.at({0, 1}), 0.0f, "gemma tied lm_head logit 1 uses the unscaled embedding row");
+        expect_close(output.at({0, 2}), -(gemma_final0 + gemma_final1),
+                     "gemma tied lm_head logit 2 uses the unscaled embedding row");
+    }
+
+    // --- gemma head_dim mismatch (e.g. gemma-7b) is rejected ---
+    {
+        GgufBufferBuilder builder;
+        add_gemma_checkpoint(builder);
+        builder.add_uint32_kv("gemma.attention.key_length", 3); // derived head_dim is 2
+        GgufReader reader(builder.build());
+
+        bool threw = false;
+        try
+        {
+            (void)mini_inference::loader::build_model(reader);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+        expect(threw, "gemma head_dim mismatch throws invalid_argument");
     }
 
     if (failures != 0)
